@@ -23,18 +23,25 @@ Item {
     ]
     property string accountEmail: "me@example.com"
     property string activeAccountId: "me@example.com"
+    property var spellingPersonalWords: []
     function preferredSendAs(_r) { return null }
     function switchTo(_id) { return true }
     function refreshRecipientContacts() {}
     function send(_f) { return true }
     function copyText(_t) { return true }
     function clipboardAttachment(_dir, callback) { callback({ ok: false, error: "no-image" }); return true }
+    function addPersonalWord(word) {
+      if (word && spellingPersonalWords.indexOf(word) < 0) {
+        var words = spellingPersonalWords.slice(); words.push(word); spellingPersonalWords = words
+      }
+    }
   }
 
   Omamail.ComposeView {
     id: compose
     anchors.fill: parent
     service: mailService
+    spellingPersonalWords: mailService.spellingPersonalWords
     textColor: Qt.rgba(1, 1, 1, 1)
     backgroundColor: Qt.rgba(0.06, 0.06, 0.06, 1)
     accentColor: Qt.rgba(1, 0.5, 0, 1)

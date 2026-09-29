@@ -38,7 +38,9 @@ DropArea {
   property bool opened: false
   property bool userModified: false
   property bool settingBodyText: false
-  // S01 temporary inputs; S04 replaces them with persisted user settings.
+  // Spelling settings (S04): read from the service, applied to the adapter.
+  // The service owns the values and persistence; the composer only applies
+  // them. Missing support is reported via spellingStatus.
   property bool spellingEnabled: true
   property string spellingLanguage: "en_US"
   property var spellingPersonalWords: []
@@ -115,14 +117,12 @@ DropArea {
     return true
   }
 
-  // App-owned personal words (S00 §4): persisted by S04, applied here.
-  function addPersonalWord(word) {
-    if (!word) return
-    var words = spellingPersonalWords.slice()
-    if (words.indexOf(word) < 0) words.push(word)
-    spellingPersonalWords = words
+  // App-owned personal words (S00 §4): owned and persisted by the service
+  // (S04); applied to the adapter and rechecked whenever the list changes.
+  onSpellingPersonalWordsChanged: {
+    if (spellcheckLoader.item) spellcheckLoader.item.personalWords = spellingPersonalWords
+    refreshSpellingRanges()
   }
-  onSpellingPersonalWordsChanged: if (spellcheckLoader.item) spellcheckLoader.item.personalWords = spellingPersonalWords
   // Drafts parked for their send's undo window, oldest first, each beside
   // the name of the send it belongs to. The timer owns them while the
   // visible composer stays free for the next message.
@@ -2194,6 +2194,9 @@ DropArea {
       if (root.spellingAdapter) root.spellingAdapter.ignoreForSession(word)
       root.refreshSpellingRanges()
     }
-    onSpellingAddToDictionary: function(word) { root.addPersonalWord(word) }
+    onSpellingAddToDictionary: function(word) {
+      if (root.service && typeof root.service.addPersonalWord === "function")
+        root.service.addPersonalWord(word)
+    }
   }
 }

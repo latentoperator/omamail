@@ -2158,6 +2158,9 @@ Item {
           panelFontFamily: root.fontFamily
           errorColor: root.urgent
           contentDirection: root.service ? root.service.contentDirection : ""
+          spellingEnabled: root.service ? root.service.spellingEnabled : true
+          spellingLanguage: root.service ? root.service.spellingLanguage : "en_US"
+          spellingPersonalWords: root.service ? root.service.spellingPersonalWords : []
           // The stack follows the view: opening pushes, closing pops — and
           // the pop is here rather than on `closed`, because a draft parked
           // for sending closes without saying so.

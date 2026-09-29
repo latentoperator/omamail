@@ -140,7 +140,9 @@ Item {
     unifiedCalendarView: false,
     showBarIcon: true,
     unifiedMailboxes: false,
-    suggestEvents: false
+    suggestEvents: false,
+    spellingEnabled: true,
+    spellingLanguage: "en_US"
   })
   function normalizedSettings(values) {
     var next = ({})
@@ -424,7 +426,7 @@ Item {
   }
 
   function writeConfig(name, text, callback) {
-    var allowed = ["credentials.json", "window.json", "calendars.json"]
+    var allowed = ["credentials.json", "window.json", "calendars.json", "spelling.json"]
     if (allowed.indexOf(String(name || "")) < 0) {
       if (typeof callback === "function") callback(false, "Invalid configuration file")
       return false
@@ -625,6 +627,74 @@ Item {
   // survives a restart.
   function setUnifiedMailboxes(value) {
     persistSetting("unifiedMailboxes", value === true)
+  }
+
+  // ------------------------------------------------------------- spelling
+  //
+  // Spelling is local and optional: the composer loads the Sonnet adapter
+  // through a Loader, so a machine without the module or dictionary still
+  // composes. The enabled flag is the user's request; availability is a
+  // separate runtime fact reported by the probe, so "off because the user
+  // turned it off" and "off because en_US is missing" read differently.
+  readonly property bool spellingEnabled: !settings || settings.spellingEnabled !== false
+  function setSpellingEnabled(value) { persistSetting("spellingEnabled", value !== false) }
+  readonly property string spellingLanguage: settings
+    ? String(settings.spellingLanguage || "en_US") : "en_US"
+  function setSpellingLanguage(value) { persistSetting("spellingLanguage", String(value || "en_US")) }
+
+  // Whether Sonnet and the requested dictionary are actually loadable. The
+  // probe is separate from the per-composer adapter so the settings page can
+  // explain a missing module or dictionary before any compose window opens.
+  readonly property bool spellingAvailable: spellingProbe.status === Loader.Ready
+    && spellingProbe.item !== null && spellingProbe.item.available
+  readonly property string spellingStatus: spellingProbe.status === Loader.Error
+    ? "no-module" : (spellingProbe.item ? spellingProbe.item.status : "loading")
+
+  // App-owned personal words (S00 §4, S6): persisted beside the other window
+  // state, applied by the composer, never written to a global dictionary.
+  property var spellingPersonalWords: []
+  property bool spellingPersonalWordsLoaded: false
+  property bool spellingPersonalWordsWriting: false
+
+  function applySpellingPersonalWords(raw) {
+    var parsed = null
+    try { parsed = JSON.parse(String(raw || "")) } catch (e) { parsed = null }
+    var words = (parsed && Array.isArray(parsed.words)) ? parsed.words : []
+    var next = []
+    for (var i = 0; i < words.length; i++) {
+      var word = words[i]
+      if (typeof word !== "string") continue
+      if (word !== "" && next.indexOf(word) < 0) next.push(word)
+    }
+    spellingPersonalWords = next
+    spellingPersonalWordsLoaded = true
+  }
+
+  function saveSpellingPersonalWords() {
+    if (!spellingPersonalWordsLoaded || spellingPersonalWordsWriting) return
+    spellingPersonalWordsWriting = true
+    writeConfig("spelling.json", JSON.stringify({ words: spellingPersonalWords }), function(ok) {
+      root.spellingPersonalWordsWriting = false
+    })
+  }
+
+  function addPersonalWord(word) {
+    var value = String(word || "")
+    if (value === "" || spellingPersonalWords.indexOf(value) >= 0) return
+    var next = spellingPersonalWords.slice()
+    next.push(value)
+    spellingPersonalWords = next
+    saveSpellingPersonalWords()
+  }
+
+  function removePersonalWord(word) {
+    var value = String(word || "")
+    var at = spellingPersonalWords.indexOf(value)
+    if (at < 0) return
+    var next = spellingPersonalWords.slice()
+    next.splice(at, 1)
+    spellingPersonalWords = next
+    saveSpellingPersonalWords()
   }
 
   // ---------------------------------------------------------- the accounts
@@ -2620,6 +2690,24 @@ Item {
     onLoaded: root.applyWindowPrefs(text())
     // No file yet is the ordinary first-run state, not an error.
     onLoadFailed: root.applyWindowPrefs("")
+  }
+
+  // Spelling's personal dictionary is app-owned (S00 §4): persisted beside the
+  // window state, never written to a global dictionary.
+  FileView {
+    id: spellingWordsFile
+    path: root.configPath("spelling.json")
+    printErrors: false
+    onLoaded: root.applySpellingPersonalWords(text())
+    onLoadFailed: root.applySpellingPersonalWords("")
+  }
+
+  // Availability probe: loads Sonnet once so the settings page can explain a
+  // missing module or dictionary without a compose window open.
+  Loader {
+    id: spellingProbe
+    active: true
+    source: "compose/SpellcheckAdapter.qml"
   }
 
   Timer {

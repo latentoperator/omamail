@@ -142,5 +142,55 @@ Item {
       compare(shellStore.updatedEntry.previewOnCursor, true)
       compare(shellStore.updatedEntry.markReadDelaySec, 30)
     }
+
+    // ------------------------------------------------------------ spelling
+
+    function test_spelling_defaults_on_and_persists_changes() {
+      mailService.applySettings({})
+      compare(mailService.spellingEnabled, true)
+      compare(mailService.spellingLanguage, "en_US")
+
+      mailService.setSpellingEnabled(false)
+      compare(mailService.spellingEnabled, false)
+      compare(shellStore.updatedEntry.spellingEnabled, false)
+
+      // A stored value of another shape is not a decision to turn it off.
+      mailService.applySettings({ spellingEnabled: "no" })
+      compare(mailService.spellingEnabled, true)
+
+      mailService.setSpellingLanguage("en_GB")
+      compare(mailService.spellingLanguage, "en_GB")
+      compare(shellStore.updatedEntry.spellingLanguage, "en_GB")
+    }
+
+    function test_spelling_personal_words_add_remove_and_dedupe() {
+      mailService.applySpellingPersonalWords("")
+      compare(mailService.spellingPersonalWords.length, 0)
+      mailService.addPersonalWord("blorptar")
+      mailService.addPersonalWord("blorptar")
+      mailService.addPersonalWord("floobert")
+      compare(mailService.spellingPersonalWords.length, 2)
+      compare(mailService.spellingPersonalWords[0], "blorptar")
+      mailService.removePersonalWord("blorptar")
+      compare(mailService.spellingPersonalWords.length, 1)
+      compare(mailService.spellingPersonalWords[0], "floobert")
+    }
+
+    function test_spelling_personal_words_parse_dedupe_and_ignore_junk() {
+      mailService.applySpellingPersonalWords('{"words":["a","b","a","","c",42,null]}')
+      compare(mailService.spellingPersonalWords.length, 3)
+      compare(mailService.spellingPersonalWords[0], "a")
+      compare(mailService.spellingPersonalWords[1], "b")
+      compare(mailService.spellingPersonalWords[2], "c")
+    }
+
+    // The probe loads Sonnet through the same adapter the composer uses; it
+    // settles into one concrete status on any machine rather than hanging.
+    function test_spelling_availability_settles_to_a_known_status() {
+      tryVerify(function() {
+        var status = mailService.spellingStatus
+        return status === "ready" || status === "no-dictionary" || status === "no-module"
+      }, 3000)
+    }
   }
 }
