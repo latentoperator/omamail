@@ -1,5 +1,6 @@
 //! Native asynchronous IMAP and SMTP. Credentials never cross a process boundary.
 mod cancel;
+mod export;
 pub(crate) mod idle;
 mod mutation;
 mod read;
@@ -469,6 +470,7 @@ pub(crate) async fn execute_planned_action(
 pub async fn call(method: &str, p: &Value) -> Result<Value> {
     read::validate(method, p)?;
     mutation::validate(method, p)?;
+    export::validate(method, p)?;
     if method == "imap.cancel" {
         return cancel::cancel(p).await;
     }
@@ -480,6 +482,7 @@ pub async fn call(method: &str, p: &Value) -> Result<Value> {
             | "imap.messages"
             | "imap.count"
             | "imap.attachment"
+            | "imap.rawMessage"
             | "imap.check"
     ) {
         return cancel::run(p, call_inner(method, p)).await;
@@ -577,6 +580,9 @@ fn unsafe_fetch(command: &str) -> bool {
 }
 async fn execute(method: &str, p: &Value, sent: &std::sync::atomic::AtomicBool) -> Result<Value> {
     credentials(p)?;
+    if method == "imap.rawMessage" {
+        return export::call(p).await;
+    }
     if matches!(
         method,
         "imap.folders"

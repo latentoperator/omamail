@@ -4,33 +4,33 @@ use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use std::collections::{BTreeMap, BTreeSet};
 mod search;
 #[derive(Clone, Debug, PartialEq)]
-enum Node {
+pub(super) enum Node {
     Text(Vec<u8>),
     List(Vec<Node>),
     End,
 }
 impl Node {
-    fn text(&self) -> &[u8] {
+    pub(super) fn text(&self) -> &[u8] {
         if let Self::Text(t) = self { t } else { b"" }
     }
-    fn is(&self, value: &str) -> bool {
+    pub(super) fn is(&self, value: &str) -> bool {
         self.text().eq_ignore_ascii_case(value.as_bytes())
     }
-    fn number(&self) -> Option<u32> {
+    pub(super) fn number(&self) -> Option<u32> {
         std::str::from_utf8(self.text())
             .ok()?
             .parse::<u32>()
             .ok()
             .filter(|n| *n > 0)
     }
-    fn list(&self) -> &[Node] {
+    pub(super) fn list(&self) -> &[Node] {
         if let Self::List(v) = self { v } else { &[] }
     }
     fn string(&self) -> Result<String> {
         String::from_utf8(self.text().to_vec()).map_err(|_| "imap_invalid_response")
     }
 }
-fn nodes(data: &[u8]) -> Result<Vec<Vec<Node>>> {
+pub(super) fn nodes(data: &[u8]) -> Result<Vec<Vec<Node>>> {
     fn parse(
         data: &[u8],
         at: &mut usize,
