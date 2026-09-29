@@ -67,7 +67,13 @@ Item {
       return null
     }
 
-    function init() { compose.begin("new", null, "", []) }
+    function init() {
+      compose.begin("new", null, "", [])
+      // Reset the layout and the requested language: an earlier case may have
+      // narrowed the composer or pointed at a dictionary that is not here.
+      compose.parent.width = 900
+      compose.spellingLanguage = "en_US"
+    }
 
     function test_body_adapter_attaches_and_checking_does_not_mutate() {
       var body = named(compose, "compose-body-editor")
@@ -184,6 +190,47 @@ Item {
       verify(menu.opened, "the caret shortcut opened the menu")
       compare(menu.spellingWord, "mispelled")
       verify(menu.spellingSuggestions.length > 0)
+    }
+
+    // The adapter's language follows the setting after load, and availability
+    // is about the requested dictionary: a missing one reads no-dictionary and
+    // switching back recovers, with no silent fallback to English.
+    function test_language_follows_the_setting_and_reports_a_missing_dictionary() {
+      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      if (compose.spellingStatus === "no-module") { skip("Sonnet is not installed"); return }
+      compose.spellingLanguage = "en_US"
+      tryVerify(function() { return compose.spellingStatus === "ready" }, 3000)
+      compose.spellingLanguage = "zz_ZZ"
+      tryVerify(function() { return compose.spellingStatus === "no-dictionary" }, 3000)
+      compare(compose.spellingAvailable, false)
+      compose.spellingLanguage = "en_US"
+      tryVerify(function() { return compose.spellingStatus === "ready" }, 3000)
+      compare(compose.spellingAvailable, true)
+    }
+
+    // The underline is positioned from positionToRectangle(), which reads the
+    // editor's width, wrap and font in C++. The binding has to name those
+    // inputs, or a wrapped word keeps an underline where the word used to be.
+    function test_underline_follows_the_editor_when_it_resizes() {
+      var body = named(compose, "compose-body-editor")
+      verify(body)
+      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      if (!compose.spellingAvailable) { skip("spelling unavailable (" + compose.spellingStatus + ")"); return }
+      body.text = "hello hello hello hello hello hello hello hello hello hello hello hello wrod here "
+      wait(250)
+      compare(compose.spellingRanges.length, 1)
+      var start = compose.spellingRanges[0].start
+      var underline = named(compose, "spelling-underline")
+      verify(underline, "a misspelled word draws an underline")
+      var wide = body.positionToRectangle(start)
+      fuzzyCompare(underline.x, wide.x, 1.0)
+      compose.parent.width = 300
+      wait(100)
+      var narrow = body.positionToRectangle(start)
+      verify(narrow.x !== wide.x || narrow.y !== wide.y,
+        "the narrower editor re-wraps the word")
+      fuzzyCompare(underline.x, narrow.x, 1.0)
+      fuzzyCompare(underline.y, narrow.y + narrow.height - underline.height, 1.0)
     }
 
     function test_disabling_unloads_the_adapter_and_re_enabling_restores_it() {

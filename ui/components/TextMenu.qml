@@ -32,6 +32,10 @@ Item {
   // UTF-16 offset the suggestions were taken from, kept so a correction still
   // targets the clicked word if the caret has moved by the time one is picked.
   property int spellingPosition: -1
+  // The document revision the suggestions were taken from. The owner refuses
+  // a correction when its live revision has moved on, so editing elsewhere
+  // cannot redirect the correction to the same word at a shifted position.
+  property int spellingRevision: -1
   property string spellingWord: ""
   property bool spellingMisspelled: false
   property var spellingSuggestions: []

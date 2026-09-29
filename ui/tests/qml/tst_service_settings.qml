@@ -19,9 +19,32 @@ Item {
     }
   }
 
+  // The personal dictionary write is asynchronous and may fail. This stands in
+  // for the host writer so a test can hold the reply and complete it later.
+  QtObject {
+    id: configPlatform
+    property var writes: []
+    property var callbacks: []
+    function writeConfig(name, text, callback) {
+      writes = writes.concat([{ name: String(name), text: String(text) }])
+      callbacks = callbacks.concat([callback])
+      return true
+    }
+    function confirm(index, ok, error) {
+      var cb = callbacks[index]
+      if (typeof cb !== "function") return false
+      var next = callbacks.slice()
+      next[index] = null
+      callbacks = next
+      cb(ok, error)
+      return true
+    }
+  }
+
   Omamail.Service {
     id: mailService
     shell: shellStore
+    platform: configPlatform
     manifest: ({ id: "omamail", __sourceDir: "/tmp/omamail-test" })
   }
 
@@ -33,6 +56,14 @@ Item {
 
   TestCase {
     name: "ServiceSettings"
+
+    function init() {
+      configPlatform.writes = []
+      configPlatform.callbacks = []
+      mailService.spellingPersonalWordsWriting = false
+      mailService.spellingPersonalWordsPending = false
+      mailService.spellingPersonalWordsError = ""
+    }
 
     function test_scoped_manifest_resolves_bundled_helpers_without_private_metadata() {
       verify(scopedMailService.pluginDir !== "")
@@ -184,6 +215,71 @@ Item {
       compare(mailService.spellingPersonalWords[2], "c")
     }
 
+    // Two words added while the first write is still in flight: the second is
+    // queued and written after the first completes, so disk ends with both.
+    function test_spelling_personal_words_queue_changes_during_a_write() {
+      mailService.applySpellingPersonalWords("")
+      configPlatform.writes = []
+      configPlatform.callbacks = []
+      mailService.addPersonalWord("alpha")
+      compare(configPlatform.writes.length, 1)
+      compare(JSON.parse(configPlatform.writes[0].text).words.length, 1)
+      mailService.addPersonalWord("beta")
+      compare(configPlatform.writes.length, 1, "the second add waits for the in-flight write")
+      compare(configPlatform.confirm(0, true, ""), true)
+      compare(configPlatform.writes.length, 2, "the queued snapshot is written once the first completes")
+      compare(JSON.parse(configPlatform.writes[1].text).words.length, 2)
+      compare(configPlatform.confirm(1, true, ""), true)
+      compare(mailService.spellingPersonalWordsError, "")
+    }
+
+    // A refused write is recorded rather than swallowed, and the next change
+    // asks the host again.
+    function test_spelling_personal_words_retry_after_a_failed_write() {
+      mailService.applySpellingPersonalWords("")
+      configPlatform.writes = []
+      configPlatform.callbacks = []
+      mailService.addPersonalWord("alpha")
+      compare(configPlatform.confirm(0, false, "disk full"), true)
+      compare(mailService.spellingPersonalWordsError, "disk full")
+      mailService.addPersonalWord("beta")
+      compare(configPlatform.writes.length, 2, "a later change retries the failed write")
+      compare(configPlatform.confirm(1, true, ""), true)
+      compare(mailService.spellingPersonalWordsError, "")
+    }
+
+    // Write then read: what a completed write put in the file is what a later
+    // read restores, which is the restart guarantee the old path never had.
+    function test_spelling_personal_words_round_trip_through_a_restart() {
+      mailService.applySpellingPersonalWords("")
+      configPlatform.writes = []
+      configPlatform.callbacks = []
+      mailService.addPersonalWord("blorptar")
+      compare(configPlatform.confirm(0, true, ""), true)
+      var saved = configPlatform.writes[0].text
+      // A restart reads the file back with no words in memory.
+      mailService.applySpellingPersonalWords(saved)
+      compare(mailService.spellingPersonalWords.length, 1)
+      compare(mailService.spellingPersonalWords[0], "blorptar")
+    }
+
+    // A word added before the initial read returns is the session's, not the
+    // file's: the later load unions the two instead of replacing memory.
+    function test_spelling_personal_words_merge_a_late_load() {
+      mailService.applySpellingPersonalWords("")
+      configPlatform.writes = []
+      configPlatform.callbacks = []
+      mailService.spellingPersonalWordsLoaded = false
+      mailService.addPersonalWord("alpha")
+      compare(configPlatform.writes.length, 0, "nothing is written before the load completes")
+      mailService.mergeSpellingPersonalWords('{"words":["beta","alpha"]}')
+      compare(mailService.spellingPersonalWords.length, 2)
+      verify(mailService.spellingPersonalWords.indexOf("alpha") >= 0)
+      verify(mailService.spellingPersonalWords.indexOf("beta") >= 0)
+      compare(configPlatform.writes.length, 1, "the deferred add is flushed after the load")
+      compare(configPlatform.confirm(0, true, ""), true)
+    }
+
     // The probe loads Sonnet through the same adapter the composer uses; it
     // settles into one concrete status on any machine rather than hanging.
     function test_spelling_availability_settles_to_a_known_status() {
@@ -191,6 +287,24 @@ Item {
         var status = mailService.spellingStatus
         return status === "ready" || status === "no-dictionary" || status === "no-module"
       }, 3000)
+    }
+
+    // Availability is about the requested dictionary, not a default-English
+    // fallback: a missing language reads no-dictionary and setting it back
+    // recovers.
+    function test_spelling_availability_follows_the_requested_language() {
+      tryVerify(function() {
+        var status = mailService.spellingStatus
+        return status === "ready" || status === "no-dictionary" || status === "no-module"
+      }, 3000)
+      if (mailService.spellingStatus === "no-module") { skip("Sonnet is not installed"); return }
+      mailService.setSpellingLanguage("en_US")
+      tryVerify(function() { return mailService.spellingStatus === "ready" }, 3000)
+      mailService.setSpellingLanguage("zz_ZZ")
+      tryVerify(function() { return mailService.spellingStatus === "no-dictionary" }, 3000)
+      compare(mailService.spellingAvailable, false)
+      mailService.setSpellingLanguage("en_US")
+      tryVerify(function() { return mailService.spellingStatus === "ready" }, 3000)
     }
   }
 }

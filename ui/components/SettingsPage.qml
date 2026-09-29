@@ -752,6 +752,22 @@ Column {
         wrapMode: Text.WordWrap
         textFormat: Text.PlainText
       }
+
+      // The personal word list is the one spelling write that can be refused
+      // by the host. The word stays in memory for the session, but a failed
+      // save has to say so rather than quietly vanish at restart.
+      Text {
+        objectName: "spellingPersonalWordsError"
+        width: parent.width
+        visible: !!root.service && String(root.service.spellingPersonalWordsError || "") !== ""
+        text: "Personal words could not be saved: "
+          + (root.service ? root.service.spellingPersonalWordsError : "")
+        color: root.accentColor
+        font.family: root.panelFontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+        textFormat: Text.PlainText
+      }
     }
 
     Text {

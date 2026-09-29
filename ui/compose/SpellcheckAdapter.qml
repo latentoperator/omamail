@@ -29,7 +29,18 @@ Item {
   // settings layer (S04); this property only applies them.
   property var personalWords: []
 
-  readonly property bool available: highlighter.spellCheckerFound
+  // Availability is about the *requested* language, and it is computed after
+  // `setCurrentLanguage` rather than bound to `spellCheckerFound`.
+  //
+  // When the requested dictionary is missing, Sonnet keeps the prior language
+  // and leaves `spellCheckerFound` true, so asking for `zz_ZZ` while `en_US` is
+  // installed would still read as ready. The accepted language is
+  // `currentLanguage`; comparing it with the request is what says "no
+  // dictionary for this one". The backing property is assigned in
+  // `applySettings` because `currentLanguage` does not notify, so a binding
+  // would hold a stale answer after the revert.
+  property bool requestedLanguageAvailable: false
+  readonly property bool available: requestedLanguageAvailable
   // "ready", "disabled", or "no-dictionary". A missing module is reported by
   // the owning Loader as Loader.Error, not here.
   readonly property string status: !enabled ? "disabled"
@@ -108,11 +119,15 @@ Item {
   function isApostrophe(character) { return character === "'" || character === "\u2019" }
 
   function applySettings() {
-    if (!available) return
-    if (enabled) {
-      highlighter.setCurrentLanguage(language)
-      applyPersonalWords()
-    }
+    // The request is attempted even when the previous one reverted: a later
+    // successful call is the only way back from a missing dictionary, and
+    // guarding on the prior result would leave the switch unrecoverable.
+    highlighter.setCurrentLanguage(language)
+    // Sonnet reports the language it accepted. A request it could not serve
+    // leaves the prior one in place, which is the no-dictionary answer.
+    requestedLanguageAvailable = highlighter.spellCheckerFound
+      && highlighter.currentLanguage === language
+    if (enabled) applyPersonalWords()
   }
 
   function applyPersonalWords() {

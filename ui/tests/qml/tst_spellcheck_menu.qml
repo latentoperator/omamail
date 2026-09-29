@@ -171,6 +171,27 @@ Item {
       compare(editor.text, before)
     }
 
+    // A revision guard, not a word-string guard. Two occurrences of the same
+    // misspelling make the string at the old position still spell `wrod`, so
+    // comparing only the word would let an edit at the front of the draft
+    // redirect the correction to the first occurrence.
+    function test_stale_same_word_aborts_the_correction() {
+      var editor = body()
+      editor.text = "a wrod and wrod here"
+      clickWord(editor, "wrod", editor.text.indexOf("wrod") + 1) // the second one
+      var m = menu()
+      compare(m.spellingWord, "wrod")
+      // Insert text ahead of both words while the menu is open: positions shift
+      // but the word string at the saved position is unchanged.
+      editor.insert(0, "12345678 ")
+      var before = editor.text
+      m.chooseSuggestion(0)
+      wait(20)
+      compare(editor.text, before,
+        "a changed document must refuse the correction even when the word repeats")
+      compare(editor.text.indexOf("wrod"), before.indexOf("wrod"))
+    }
+
     function test_no_suggestions_offers_ignore_and_add_but_no_rows() {
       var editor = body()
       editor.text = "a zxqjklv here "

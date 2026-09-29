@@ -41,9 +41,17 @@ DropArea {
   // Spelling settings (S04): read from the service, applied to the adapter.
   // The service owns the values and persistence; the composer only applies
   // them. Missing support is reported via spellingStatus.
-  property bool spellingEnabled: true
-  property string spellingLanguage: "en_US"
-  property var spellingPersonalWords: []
+  // The spelling settings live on the service; the composer follows them when
+  // one is wired, and falls back to the defaults for the tests and previews
+  // that instantiate it bare. A caller may still assign over the binding.
+  property bool spellingEnabled: service && service.spellingEnabled !== undefined
+    ? service.spellingEnabled : true
+  property string spellingLanguage: service && service.spellingLanguage !== undefined
+    ? String(service.spellingLanguage) : "en_US"
+  property var spellingPersonalWords: service ? service.spellingPersonalWords : []
+  // Bumped on every body change so a menu opened before an edit can tell that
+  // the text under its saved position moved (finding 5).
+  property int bodyRevision: 0
   // Body checking is on only when the optional Sonnet adapter loaded and
   // reports a dictionary for the requested language.
   readonly property bool spellingAvailable: spellcheckLoader.status === Loader.Ready
@@ -57,6 +65,12 @@ DropArea {
   readonly property var spellingAdapter: spellcheckLoader.item
   // Finished misspelled words as {start, end} UTF-16 offsets into the body text.
   property var spellingRanges: []
+  // Reads the layout inputs that positionToRectangle() consumes in C++, where
+  // the binding engine cannot see them. The underline bindings read this so a
+  // resize, wrap or font change re-measures their geometry (finding 9).
+  readonly property string spellingLayoutKey:
+    bodyEdit.width + ":" + bodyEdit.wrapMode + ":" + bodyEdit.font.pixelSize
+      + ":" + bodyEdit.font.family
   // The theme's error role, drawn under misspelled words. The composer draws
   // the underline itself because Sonnet's QML highlighter also colours the word
   // red; see planning/decisions/S00.md and the S01 handoff.
@@ -94,6 +108,7 @@ DropArea {
     var position = editor.positionAt(x, y)
     var info = adapter.inspect(position)
     textMenu.spellingPosition = position
+    textMenu.spellingRevision = root.bodyRevision
     textMenu.spellingWord = info.word
     textMenu.spellingMisspelled = info.misspelled
     textMenu.spellingSuggestions = info.suggestions
@@ -108,6 +123,7 @@ DropArea {
     var info = adapter.inspect(position)
     if (!info.misspelled || info.suggestions.length === 0) return false
     textMenu.spellingPosition = position
+    textMenu.spellingRevision = root.bodyRevision
     textMenu.spellingWord = info.word
     textMenu.spellingMisspelled = true
     textMenu.spellingSuggestions = info.suggestions
@@ -1921,6 +1937,7 @@ DropArea {
           root.bodyWasEdited = true
           root.noteUserModified()
         }
+        root.bodyRevision += 1
         spellingDebounce.restart()
       }
       Keys.priority: Keys.BeforeItem
@@ -1942,11 +1959,22 @@ DropArea {
           model: root.spellingRanges
           delegate: Rectangle {
             required property var modelData
+            objectName: "spelling-underline"
             // positionToRectangle gives the caret at a position (width 1), so
             // the right edge of the word is the caret one past its last
             // character, not the last character's own rectangle.
-            readonly property rect fromRect: bodyEdit.positionToRectangle(modelData.start)
-            readonly property rect toRect: bodyEdit.positionToRectangle(modelData.end)
+            //
+            // The layout key is named inside these bindings on purpose: the
+            // function reads width, wrap and font in C++, so without it a
+            // reflow would leave the underline where the word used to be.
+            readonly property rect fromRect: {
+              root.spellingLayoutKey
+              return bodyEdit.positionToRectangle(modelData.start)
+            }
+            readonly property rect toRect: {
+              root.spellingLayoutKey
+              return bodyEdit.positionToRectangle(modelData.end)
+            }
             x: fromRect.x
             y: fromRect.y + fromRect.height - height
             width: Math.max(2, fromRect.y === toRect.y
@@ -1972,10 +2000,18 @@ DropArea {
       if (!item) return
       item.document = bodyEdit.textDocument
       item.enabled = root.spellingEnabled
-      item.language = root.spellingLanguage
       item.personalWords = root.spellingPersonalWords
       root.refreshSpellingRanges()
     }
+  }
+
+  // The language is a binding, not a one-time assignment at load: a later
+  // Settings change must reach an already-open adapter (finding 6).
+  Binding {
+    target: spellcheckLoader.item
+    property: "language"
+    value: root.spellingLanguage
+    when: spellcheckLoader.item !== null
   }
 
   Rectangle {
@@ -2177,9 +2213,11 @@ DropArea {
       var adapter = root.spellingAdapter
       if (!adapter) return
       // The menu outlives its click: a draft can change underneath it (a reply
-      // quote arriving, an agent answer landing) while it is open. Re-check the
-      // word at the saved position before editing, so a stale position never
-      // rewrites whatever text now sits there.
+      // quote arriving, an agent answer landing) while it is open. A revision
+      // that moved means the saved position no longer addresses the word the
+      // menu offered, which the word string alone cannot tell when the same
+      // misspelling appears more than once. Re-check both before editing.
+      if (textMenu.spellingRevision !== root.bodyRevision) return
       var now = adapter.inspect(textMenu.spellingPosition)
       if (now.word !== textMenu.spellingWord || !now.misspelled) return
       adapter.applyCorrection(textMenu.spellingPosition, replacement)

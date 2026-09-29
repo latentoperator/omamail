@@ -652,11 +652,17 @@ Item {
 
   // App-owned personal words (S00 §4, S6): persisted beside the other window
   // state, applied by the composer, never written to a global dictionary.
+  //
+  // The write is a queue rather than a one-shot. A second word added while the
+  // first write is still in flight must reach disk too, and an add that lands
+  // before the initial file read finishes must survive the read.
   property var spellingPersonalWords: []
   property bool spellingPersonalWordsLoaded: false
   property bool spellingPersonalWordsWriting: false
+  property bool spellingPersonalWordsPending: false
+  property string spellingPersonalWordsError: ""
 
-  function applySpellingPersonalWords(raw) {
+  function normalizeSpellingPersonalWords(raw) {
     var parsed = null
     try { parsed = JSON.parse(String(raw || "")) } catch (e) { parsed = null }
     var words = (parsed && Array.isArray(parsed.words)) ? parsed.words : []
@@ -666,15 +672,45 @@ Item {
       if (typeof word !== "string") continue
       if (word !== "" && next.indexOf(word) < 0) next.push(word)
     }
+    return next
+  }
+
+  // Replace the list. The FileView load path uses `mergeSpellingPersonalWords`
+  // below; this is the explicit/reset form and what the tests drive.
+  function applySpellingPersonalWords(raw) {
+    spellingPersonalWords = normalizeSpellingPersonalWords(raw)
+    spellingPersonalWordsLoaded = true
+    if (spellingPersonalWordsPending) saveSpellingPersonalWords()
+  }
+
+  // A load that arrives after the user has already added a word must union,
+  // not replace: the in-memory additions are this session's intent and the
+  // disk copy is yesterday's.
+  function mergeSpellingPersonalWords(raw) {
+    var onDisk = normalizeSpellingPersonalWords(raw)
+    var next = spellingPersonalWords.slice()
+    for (var i = 0; i < onDisk.length; i++) {
+      if (next.indexOf(onDisk[i]) < 0) next.push(onDisk[i])
+    }
     spellingPersonalWords = next
     spellingPersonalWordsLoaded = true
+    if (spellingPersonalWordsPending) saveSpellingPersonalWords()
   }
 
   function saveSpellingPersonalWords() {
-    if (!spellingPersonalWordsLoaded || spellingPersonalWordsWriting) return
+    // Before the load completes, remember that there is something to write so
+    // the load can flush it rather than dropping it.
+    if (!spellingPersonalWordsLoaded) { spellingPersonalWordsPending = true; return }
+    if (spellingPersonalWordsWriting) { spellingPersonalWordsPending = true; return }
     spellingPersonalWordsWriting = true
-    writeConfig("spelling.json", JSON.stringify({ words: spellingPersonalWords }), function(ok) {
+    spellingPersonalWordsPending = false
+    writeConfig("spelling.json", JSON.stringify({ words: spellingPersonalWords }), function(ok, error) {
       root.spellingPersonalWordsWriting = false
+      // The write boundaries can refuse the file (a host allowlist that has
+      // not been told about it, a full disk): keep the failure where the
+      // Settings page can say so instead of pretending the word saved.
+      root.spellingPersonalWordsError = ok ? "" : String(error || "Could not save personal words")
+      if (root.spellingPersonalWordsPending) root.saveSpellingPersonalWords()
     })
   }
 
@@ -2698,16 +2734,27 @@ Item {
     id: spellingWordsFile
     path: root.configPath("spelling.json")
     printErrors: false
-    onLoaded: root.applySpellingPersonalWords(text())
-    onLoadFailed: root.applySpellingPersonalWords("")
+    // Merge rather than replace: a word added before the read returned is this
+    // session's and must not be undone by yesterday's file.
+    onLoaded: root.mergeSpellingPersonalWords(text())
+    onLoadFailed: root.mergeSpellingPersonalWords("")
   }
 
   // Availability probe: loads Sonnet once so the settings page can explain a
-  // missing module or dictionary without a compose window open.
+  // missing module or dictionary without a compose window open. Its language
+  // follows the setting so the status is about the *requested* dictionary, not
+  // a default-English fallback.
   Loader {
     id: spellingProbe
     active: true
     source: "compose/SpellcheckAdapter.qml"
+  }
+
+  Binding {
+    target: spellingProbe.item
+    property: "language"
+    value: root.spellingLanguage
+    when: spellingProbe.item !== null
   }
 
   Timer {
