@@ -30,7 +30,7 @@ Item {
   property int cursorIndex: -1
   readonly property var menuRows: [continueRow, replyRow, replyAllRow, forwardRow, archiveRow,
     unarchiveRow, moveRow,
-    trashRow, spamRow, readRow, starRow, browserRow, aiRow]
+    trashRow, spamRow, readRow, starRow, exportRow, browserRow, aiRow]
   // Whether this message is archived — out of the inbox and not somewhere
   // that has its own verb. Read off the summary the menu was opened on rather
   // than asked of the service, because the menu is about one message. IMAP
@@ -240,6 +240,23 @@ Item {
         visible: !root.service || root.service.canStar
         text: root.summary && root.summary.starred ? "Unstar" : "Star"
         onActivated: root.run(root.summary && root.summary.starred ? "unstar" : "star")
+      }
+      // Saving the message out as a file. Hidden where the provider has no
+      // native path or the connected backend does not advertise the method,
+      // like every other verb this cannot keep.
+      MenuRow {
+        id: exportRow
+        objectName: "message-menu-export-eml"
+        visible: !root.service || root.service.canExportEmlFor(root.messageId)
+        text: "Save as .eml"
+        // Writes to the user's disk through the backend rather than through a
+        // provider verb, so it goes straight to the service the way Open in
+        // browser does.
+        onActivated: {
+          var id = root.messageId
+          menu.close()
+          if (root.service) root.service.exportEml(id)
+        }
       }
 
       MenuSeparatorLine {

@@ -132,6 +132,9 @@ Item {
   // to it, with the row already moved.
   readonly property bool canArchive: Provider.can(providerId, "archive", capabilityRefusals)
   readonly property bool canReportSpam: Provider.can(providerId, "spam", capabilityRefusals)
+  // The provider must own the native IMAP path. Whether the connected backend
+  // actually advertises the method is a connection fact, checked by the service.
+  readonly property bool canExportEml: Provider.can(providerId, "emlExport", capabilityRefusals)
   readonly property bool canStar: Provider.can(providerId, "star", capabilityRefusals)
   readonly property bool canMove: Provider.can(providerId, "move", capabilityRefusals)
   readonly property bool hasLabels: Provider.can(providerId, "labels")
@@ -1992,6 +1995,46 @@ Item {
 
   function markAllRead() {
     return runNativeAction([], "markRead", false, false, true)
+  }
+
+  // Save the message's original bytes as .eml in Downloads. One request per
+  // mailbox at a time, and the notice names the file the backend actually
+  // wrote. The id is this mailbox's own, resolved by the service.
+  property bool exportingEml: false
+  property string exportingEmlId: ""
+
+  function subjectForEml(id) {
+    for (var i = 0; i < messages.length; i++) {
+      if (String(messages[i].id) === String(id)) return String(messages[i].subject || "")
+    }
+    return ""
+  }
+
+  function exportEml(id) {
+    var target = String(id || "")
+    if (!ready || !backend || target === "") return false
+    if (!canExportEml) {
+      fail("This mailbox cannot save messages as .eml")
+      return false
+    }
+    if (exportingEml) {
+      note("Already saving a message as .eml")
+      return false
+    }
+    var parameters = {account: accountId, id: target, suggestedName: subjectForEml(target)}
+    exportingEml = true
+    exportingEmlId = target
+    backend.call("mail.exportEml", parameters, function(result, error) {
+      root.exportingEml = false
+      root.exportingEmlId = ""
+      if (error) {
+        var message = error && error.message ? error.message : String(error || "")
+        root.fail(message || "Could not save the message as .eml")
+        return
+      }
+      root.note("Saved " + String(result.filename || "") + " to " + String(result.path || ""))
+    })
+    return true
   }
 
   function actMany(ids, action) { return batchAction.run(ids, action) }

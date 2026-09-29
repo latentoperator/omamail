@@ -1949,6 +1949,14 @@ Item {
   // from `current` alone, archiving a row from a non-active mailbox in a merged
   // list produced no confirmation and no undo affordance at all — so the most
   // recent of them wins, which is the one the press just produced.
+  // Whether the connected backend advertises the export method. The handshake
+  // publishes its method list; a provider API number alone cannot prove a
+  // private extension exists, so method presence is asked directly.
+  readonly property bool backendCanExportEml: {
+    var info = rustBackend ? rustBackend.protocolInfo : null
+    return !!info && Array.isArray(info.methods) && info.methods.indexOf("mail.exportEml") >= 0
+  }
+
   readonly property string actionStatus: {
     if (!unified) return current ? current.actionStatus : ""
     var _epoch = listEpoch
@@ -2162,6 +2170,24 @@ Item {
   function toggleStar(id) {
     var host = hostForId(id)
     if (host) host.toggleStar(sourceIdFor(id))
+  }
+  // Saving one message out as a file. The owning mailbox does the work; the
+  // capability is the provider's ceiling and the backend method together.
+  function canExportEmlFor(id) {
+    if (!backendCanExportEml) return false
+    var host = (id === undefined || id === "") ? current : hostForId(id)
+    if (!host) host = current
+    return !!host && host.canExportEml
+  }
+  function exportEml(id) {
+    var host = hostForId(id)
+    return host ? host.exportEml(sourceIdFor(id)) : false
+  }
+  // Save as .eml from the keyboard: the reader's open message, else the list's
+  // cursor row. Resolved here so App.qml stays a one-line case like the rest.
+  function exportFromView(view, cursorId) {
+    var id = view === "reader" && selectedId !== "" ? selectedId : cursorId
+    return String(id || "") === "" ? false : exportEml(id)
   }
   function markAllRead() {
     if (!unified) {
