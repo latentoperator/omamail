@@ -6,12 +6,19 @@ mod search;
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Node {
     Text(Vec<u8>),
+    /// A length-framed `{n}\r\n…` literal. Distinct from `Text` so a caller
+    /// that needs the original bytes can refuse an atom or quoted string that
+    /// merely looks like them.
+    Literal(Vec<u8>),
     List(Vec<Node>),
     End,
 }
 impl Node {
     pub(super) fn text(&self) -> &[u8] {
-        if let Self::Text(t) = self { t } else { b"" }
+        match self {
+            Self::Text(t) | Self::Literal(t) => t,
+            _ => b"",
+        }
     }
     pub(super) fn is(&self, value: &str) -> bool {
         self.text().eq_ignore_ascii_case(value.as_bytes())
@@ -26,10 +33,10 @@ impl Node {
     pub(super) fn list(&self) -> &[Node] {
         if let Self::List(v) = self { v } else { &[] }
     }
-    /// A list-valued node is never a body literal. The export path needs to
-    /// refuse one rather than read it as empty bytes through `text()`.
-    pub(super) fn is_list(&self) -> bool {
-        matches!(self, Self::List(_))
+    /// Whether this node was a length-framed literal rather than an atom or a
+    /// quoted string.
+    pub(super) fn is_literal(&self) -> bool {
+        matches!(self, Self::Literal(_))
     }
     fn string(&self) -> Result<String> {
         String::from_utf8(self.text().to_vec()).map_err(|_| "imap_invalid_response")
@@ -120,7 +127,7 @@ pub(super) fn nodes(data: &[u8]) -> Result<Vec<Vec<Node>>> {
                     if n > data.len() - *at {
                         return Err("imap_invalid_response");
                     }
-                    out.push(Node::Text(data[*at..*at + n].to_vec()));
+                    out.push(Node::Literal(data[*at..*at + n].to_vec()));
                     *at += n;
                 }
                 _ => {

@@ -76,16 +76,17 @@ fn single_literal(data: &[u8], uid: u32) -> Result<Vec<u8>> {
                 uid_fields += 1;
                 row_uid = value.number();
             } else if name.eq_ignore_ascii_case(b"BODY[]") {
-                // A list-valued body is not a literal, and reading it through
-                // `text()` would silently become empty bytes.
-                if value.is_list() {
-                    malformed = true;
+                if value.is_literal() {
+                    // A length-framed literal is the only accepted body. A
+                    // literal whose content happens to read "NIL" is still
+                    // those bytes, not the absent-message marker.
+                    bodies.push(Some(value.text().to_vec()));
+                } else if value.is("NIL") {
+                    // An atom NIL means the message is gone.
+                    bodies.push(None);
                 } else {
-                    bodies.push(if value.is("NIL") {
-                        None
-                    } else {
-                        Some(value.text().to_vec())
-                    });
+                    // An atom, quoted string, or list is not a body literal.
+                    malformed = true;
                 }
             } else if name
                 .to_ascii_uppercase()
@@ -96,6 +97,16 @@ fn single_literal(data: &[u8], uid: u32) -> Result<Vec<u8>> {
                 malformed = true;
             }
             i += 2;
+        }
+        // A dangling field name (an odd FETCH record) is incomplete structure,
+        // not a name to ignore.
+        if i < fields.len() {
+            let name = fields[i].text();
+            if name.eq_ignore_ascii_case(b"UID")
+                || name.to_ascii_uppercase().starts_with(b"BODY[")
+            {
+                malformed = true;
+            }
         }
         // An unsolicited record for another UID is not this message and is
         // ignored; only the requested UID's record is judged.
@@ -180,6 +191,38 @@ mod tests {
         assert_eq!(
             literal("* 1 FETCH (BODY[] {1}\r\nA)\r\n"),
             Err("mail_export_message_missing")
+        );
+    }
+
+    #[test]
+    fn raw_message_refuses_an_atom_body() {
+        assert_eq!(
+            literal("* 1 FETCH (UID 1 BODY[] garbage)\r\n"),
+            Err("mail_export_incomplete")
+        );
+    }
+
+    #[test]
+    fn raw_message_refuses_a_quoted_body() {
+        assert_eq!(
+            literal("* 1 FETCH (UID 1 BODY[] \"garbage\")\r\n"),
+            Err("mail_export_incomplete")
+        );
+    }
+
+    #[test]
+    fn raw_message_treats_a_literal_nil_as_content_not_absence() {
+        assert_eq!(
+            literal("* 1 FETCH (UID 1 BODY[] {3}\r\nNIL)\r\n"),
+            Ok(b"NIL".to_vec())
+        );
+    }
+
+    #[test]
+    fn raw_message_refuses_a_dangling_body_field() {
+        assert_eq!(
+            literal("* 1 FETCH (UID 1 BODY[] {1}\r\nA BODY[])\r\n"),
+            Err("mail_export_incomplete")
         );
     }
 }
