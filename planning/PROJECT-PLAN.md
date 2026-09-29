@@ -102,7 +102,7 @@ Develop in the Projects checkout or its worktrees. F00 proves a standalone synth
 
 R00 decides the exact private release version, manifest/pin relationship, source fingerprint, and authenticated/local artifact installation before D01. Do not simply point an unauthenticated public downloader at private release assets or weaken checksum/handshake verification. For this one-laptop scope, an explicitly installed verified local build is acceptable and may be simpler than a private release service. Its interaction with `install-local`, local-build metadata, regular update checks, and rollback must be proven.
 
-Repository bootstrap keeps GitHub Actions disabled until F00 audits and adapts CI. Inherited Pages and release workflows are not private deployment mechanisms. No Pages site or release publication is requested. The regular CI suite may expect release assets in its current repository that the private copy does not own; F00 must preserve the upstream published-backend gate deliberately, not fake assets or drop it silently.
+F00 audits and adapts CI before Actions is enabled. Inherited Pages and release workflows are not deployment mechanisms for this derivative. No Pages site or release publication is requested. The regular CI suite expects release assets that this derivative does not own; F00 must preserve the upstream published-backend gate deliberately, not fake assets or drop it silently.
 
 ## 4. Milestones and dependency order
 
@@ -132,7 +132,7 @@ Targeted task tests must exercise behavior and fail on the missing/broken implem
 
 Record baseline failures before feature work. Reproduce suspected pre-existing failures at both baseline and candidate under matching conditions. Never call an incomplete suite green. The supervisor alone can classify a proven unrelated failure as a documented limitation, and must still show all changed behavior and affected boundaries passed. A new failure blocks acceptance.
 
-Visual acceptance uses synthetic mail, light and dark themes, compact and wide windows, and keyboard plus mouse. Capture matched before/after views for every changed interaction: body underline, subject underline, suggestions menu, missing dictionary, save busy state, success, and error. Keep images out of Git history; use private PR attachments or sanitized local artifacts and link the evidence. Each record names commit, runtime, theme, size, and scenario. A screenshot of a mock is not evidence of a live plugin interaction.
+Visual acceptance uses synthetic mail, light and dark themes, compact and wide windows, and keyboard plus mouse. Capture matched before/after views for every changed interaction: body underline, subject underline, suggestions menu, missing dictionary, save busy state, success, and error. Keep images out of Git history; use only sanitized PR attachments or local artifacts and link the evidence. Each record names commit, runtime, theme, size, and scenario. A screenshot of a mock is not evidence of a live plugin interaction.
 
 EML acceptance compares file bytes/digests with the controlled server's original payload and opens a synthetic exported message in an independent MIME reader or available mail client. Check attachment digest, headers, dates, Unicode subject, alternative bodies, and unread state. Real account exports, if used for final owner acceptance, stay local and are never committed or attached to PRs.
 
@@ -143,5 +143,5 @@ See [REVIEW-GATE.md](REVIEW-GATE.md) for the decision matrix and [TASKS.md](TASK
 - [Sonnet SpellcheckHighlighter](https://api.kde.org/qml-org-kde-sonnet-spellcheckhighlighter.html): text-document integration and QML API; cross-check the installed `.qmltypes` before implementation.
 - [Microsoft MIME export](https://learn.microsoft.com/en-us/graph/outlook-get-mime-message): `.eml` as complete MIME mail. The chosen v1 implementation uses existing IMAP access, not new Graph permissions.
 - [Microsoft MSG format](https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-oxmsg/cd44ec9f-01bb-4ea3-b335-87cfeb827594): separate structured binary serialization, deferred.
-- [GitHub fork visibility](https://docs.github.com/en/pull-requests/reference/forks): why this is an independent private copy.
+- [GitHub fork visibility](https://docs.github.com/en/pull-requests/reference/forks): background on how this independent repository was created.
 - Local contracts: [AGENTS.md](../AGENTS.md), [architecture](../docs/ARCHITECTURE.md), [keys](../docs/KEYS.md), [runtime](../docs/BACKEND-RUNTIME.md), [API](../backend-api.json), and [Makefile](../Makefile).

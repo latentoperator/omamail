@@ -3,8 +3,8 @@
 The supervisor fills the values in angle brackets. Give a worker one task; do not paste the entire conversation.
 
 ```text
-You are implementing task <TASK-ID> for Chris Gray's private Omamail derivative.
-Repository: /home/chrisgray/Projects/omamail (origin must be the private repo).
+You are implementing task <TASK-ID> for Chris Gray's public Omamail derivative.
+Repository: /home/chrisgray/Projects/omamail (origin must be latentoperator/omamail).
 Task worktree: <ABSOLUTE-PATH>
 Base commit: <FULL-SHA>
 Branch: task/<TASK-ID>-<short-purpose>
@@ -33,7 +33,7 @@ return a reproduction and smallest decision needed from the supervisor.
 Escalate before changing frozen contracts or broadening scope.
 
 Commit your task changes. Finish with planning/templates/HANDOFF.md filled in
-for the exact candidate SHA, plus a private draft PR if that publication was
+for the exact candidate SHA, plus a draft PR in this repository if that publication was
 included in this assignment. Status is READY FOR REVIEW, not ACCEPTED. You
 cannot merge, approve your own work, deploy, or publish a release. The supervising
 Codex agent makes the final judgment after independent review.

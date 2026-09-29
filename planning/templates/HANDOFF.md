@@ -8,7 +8,7 @@ Status: READY FOR REVIEW / BLOCKED. Never mark ACCEPTED here.
 - Base SHA:
 - Candidate SHA:
 - Branch/worktree:
-- Private PR:
+- PR in this repository:
 - Accepted prerequisite decisions and their SHAs:
 - Implementer/model (if known):
 

@@ -327,6 +327,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ARCH: ${{ matrix.arch }}
           SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
+          # This derivative keeps upstream history and tags but has no
+          # release assets of its own, and publishing them is out of scope. The
+          # pinned release the plugin uses is published by the upstream project,
+          # so the released gate verifies that actual binary.
+          RELEASED_BACKEND_REPO: huacnlee/omamail
         run: |
           set -euo pipefail
           version="$(python3 scripts/package-backend.py pin-version)"
@@ -335,10 +340,11 @@ jobs:
           case "$SOURCE_BRANCH" in
             release/*) python3 scripts/package-backend.py check --require-pin ;;
           esac
-          # Missing bootstrap assets intentionally fail this required check.
-          test "$(gh release view "v$version" --json isDraft --jq .isDraft)" = false
+          # Missing upstream assets intentionally fail this check. Verify the
+          # released binary from the project that actually publishes it.
+          test "$(gh release view "v$version" --repo "$RELEASED_BACKEND_REPO" --json isDraft --jq .isDraft)" = false
           mkdir published
-          gh release download "v$version" --dir published --pattern 'omamail-linux-*.tar.gz' --pattern SHA256SUMS --pattern backend-api.json
+          gh release download "v$version" --repo "$RELEASED_BACKEND_REPO" --dir published --pattern 'omamail-linux-*.tar.gz' --pattern SHA256SUMS --pattern backend-api.json
           python3 scripts/package-backend.py verify published
           # Internal Rust changes may reuse this release; API changes may not.
           python3 scripts/package-backend.py check-api --published published/backend-api.json
