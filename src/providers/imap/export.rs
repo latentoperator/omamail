@@ -118,3 +118,68 @@ fn single_literal(data: &[u8], uid: u32) -> Result<Vec<u8>> {
     }
     found.ok_or("mail_export_message_missing")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The parser reads the framed response directly, so a malformed FETCH
+    /// record needs no socket and no pooled IMAP connection.
+    fn literal(record: &str) -> Result<Vec<u8>> {
+        let mut data = record.as_bytes().to_vec();
+        data.extend_from_slice(b"O1 OK fetched\r\n");
+        single_literal(&data, 1)
+    }
+
+    #[test]
+    fn raw_message_returns_a_full_body_literal() {
+        assert_eq!(
+            literal("* 1 FETCH (UID 1 BODY[] {4}\r\nABCD)\r\n"),
+            Ok(b"ABCD".to_vec())
+        );
+    }
+
+    #[test]
+    fn raw_message_refuses_two_body_fields_in_one_record() {
+        assert_eq!(
+            literal("* 1 FETCH (UID 1 BODY[] {1}\r\nA BODY[] {1}\r\nB)\r\n"),
+            Err("mail_export_incomplete")
+        );
+    }
+
+    #[test]
+    fn raw_message_refuses_a_partial_body_section() {
+        assert_eq!(
+            literal("* 1 FETCH (UID 1 BODY[HEADER] {4}\r\nAAAA)\r\n"),
+            Err("mail_export_incomplete")
+        );
+    }
+
+    #[test]
+    fn raw_message_refuses_a_list_valued_body() {
+        assert_eq!(
+            literal("* 1 FETCH (UID 1 BODY[] (\"a\" \"b\"))\r\n"),
+            Err("mail_export_incomplete")
+        );
+    }
+
+    #[test]
+    fn raw_message_refuses_a_duplicate_uid() {
+        assert_eq!(
+            literal("* 1 FETCH (UID 1 UID 1 BODY[] {1}\r\nA)\r\n"),
+            Err("mail_export_incomplete")
+        );
+    }
+
+    #[test]
+    fn raw_message_refuses_a_mismatched_or_missing_uid() {
+        assert_eq!(
+            literal("* 1 FETCH (UID 2 BODY[] {1}\r\nA)\r\n"),
+            Err("mail_export_message_missing")
+        );
+        assert_eq!(
+            literal("* 1 FETCH (BODY[] {1}\r\nA)\r\n"),
+            Err("mail_export_message_missing")
+        );
+    }
+}
