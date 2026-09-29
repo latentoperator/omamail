@@ -8,22 +8,205 @@ use super::{Account, ExportRequest, Provider};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     future::Future,
     path::{Path, PathBuf},
     pin::Pin,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
 };
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
 /// The product limit from E00: below the transport's 32 MiB response bound and
 /// above the 20 MiB attachment limit. Checked before any unbounded allocation.
 pub(crate) const MAX_BYTES: usize = 25 * 1024 * 1024;
 
+/// The operation deadline E00 froze. It is enforced inside the export, under
+/// the client's 30 s bridge deadline, and never leaves a partial file.
+pub(crate) const EXPORT_DEADLINE: Duration = Duration::from_secs(25);
+
+/// The frozen concurrency ceiling: one export per account, at most two overall.
+const GLOBAL_INFLIGHT: usize = 2;
+const ACCOUNT_INFLIGHT: usize = 1;
+
+/// The process-wide concurrency ceiling. Every RPC dispatch shares one of
+/// these, so a CLI client and the QML window cannot exceed the frozen limit by
+/// asking different accounts at once. Tests build their own, so they neither
+/// contend with each other nor leave permits held for an unrelated case.
+pub(crate) struct ExportLimits {
+    global: Arc<Semaphore>,
+    accounts: std::sync::Mutex<HashMap<String, Arc<Semaphore>>>,
+}
+
+impl ExportLimits {
+    pub(crate) fn new() -> Self {
+        Self {
+            global: Arc::new(Semaphore::new(GLOBAL_INFLIGHT)),
+            accounts: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn account(&self, account: &str) -> Arc<Semaphore> {
+        let mut accounts = self.accounts.lock().unwrap_or_else(|error| error.into_inner());
+        accounts
+            .entry(account.to_owned())
+            .or_insert_with(|| Arc::new(Semaphore::new(ACCOUNT_INFLIGHT)))
+            .clone()
+    }
+
+    /// Take the global permit first, then the account's. A single account can
+    /// therefore never hold both global permits, and two accounts can run
+    /// together. Both waits share the operation deadline.
+    async fn acquire(
+        &self,
+        account: &str,
+        deadline: tokio::time::Instant,
+    ) -> Result<(OwnedSemaphorePermit, OwnedSemaphorePermit), &'static str> {
+        let global = self.global.clone();
+        let account = self.account(account);
+        let global = tokio::time::timeout_at(deadline, global.acquire_owned())
+            .await
+            .map_err(|_| "request_timed_out")?
+            .map_err(|_| "request_cancelled")?;
+        let account = tokio::time::timeout_at(deadline, account.acquire_owned())
+            .await
+            .map_err(|_| "request_timed_out")?
+            .map_err(|_| "request_cancelled")?;
+        Ok((global, account))
+    }
+}
+
+static PROCESS_LIMITS: OnceLock<ExportLimits> = OnceLock::new();
+
+/// The concurrency ceiling every dispatch in this backend process shares.
+pub(crate) fn process_limits() -> &'static ExportLimits {
+    PROCESS_LIMITS.get_or_init(ExportLimits::new)
+}
+
+/// An in-process cancellation signal. The select observes it before the commit
+/// point; the drop guard raises it when the future is dropped (a disconnected
+/// client or an expired RPC) so the provider fetch is stopped as well.
+#[derive(Clone, Default)]
+struct Cancellation {
+    inner: Arc<CancelInner>,
+}
+
+#[derive(Default)]
+struct CancelInner {
+    cancelled: AtomicBool,
+    notify: Notify,
+}
+
+impl Cancellation {
+    fn cancel(&self) {
+        self.inner.cancelled.store(true, Ordering::SeqCst);
+        self.inner.notify.notify_waiters();
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.inner.cancelled.load(Ordering::SeqCst)
+    }
+
+    async fn cancelled(&self) {
+        loop {
+            let notified = self.inner.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.is_cancelled() {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+/// The per-request controls E00 froze. The token names the provider fetch in
+/// the IMAP cancel registry; the signal lets the export stop it before commit.
+/// Cloning shares both, so the drop guard can cancel a request it did not make.
+#[derive(Clone)]
+pub(crate) struct ExportControl {
+    pub(crate) token: String,
+    cancel: Cancellation,
+}
+
+impl ExportControl {
+    pub(crate) fn new() -> Self {
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        Self {
+            token: format!("export-{}-{sequence}", std::process::id()),
+            cancel: Cancellation::default(),
+        }
+    }
+
+    /// The in-process signal the deadline select observes. External callers
+    /// cancel through the provider registry with `token`; this hook exists so a
+    /// test can cancel a request it did not create.
+    #[cfg(test)]
+    pub(crate) fn cancel(&self) {
+        self.cancel.cancel();
+    }
+}
+
+/// Stop the provider fetch when the export is dropped before it commits. The
+/// synchronous write cannot be interrupted: once it starts, the operation
+/// returns success, so the guard is disarmed at that point rather than
+/// cancelling a file that is already on disk.
+struct ControlGuard {
+    account: String,
+    token: String,
+    cancel: Cancellation,
+    armed: bool,
+}
+
+impl ControlGuard {
+    fn new(account: &str, control: &ExportControl) -> Self {
+        Self {
+            account: account.to_owned(),
+            token: control.token.clone(),
+            cancel: control.cancel.clone(),
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ControlGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.armed = false;
+        self.cancel.cancel();
+        let account = std::mem::take(&mut self.account);
+        let token = std::mem::take(&mut self.token);
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let _ = crate::providers::imap::call(
+                    "imap.cancel",
+                    &json!({"accountId": account, "requestToken": token}),
+                )
+                .await;
+            });
+        }
+    }
+}
+
 /// Fetches the raw provider result (`{"bytes": n, "data": <base64>}`) for one
-/// account-qualified message. The backend supplies the IMAP-backed one.
+/// account-qualified message. The backend supplies the IMAP-backed one; the
+/// request token is what the IMAP cancel registry can name.
 pub(crate) trait ExportAdapter: Send + Sync {
     fn raw<'a>(
         &'a self,
         account: &'a Account,
         id: &'a str,
+        request_token: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Value, &'static str>> + Send + 'a>>;
 }
 
@@ -32,6 +215,8 @@ pub(crate) async fn export_with(
     adapter: &impl ExportAdapter,
     downloads: &Path,
     refusals: &Value,
+    limits: &ExportLimits,
+    control: &ExportControl,
 ) -> Result<Value, &'static str> {
     // Provider ceiling: only Outlook and generic IMAP share the native path.
     if !matches!(request.account.provider, Provider::Outlook | Provider::Imap) {
@@ -43,11 +228,43 @@ pub(crate) async fn export_with(
     // Reject a malformed `<uid>:<folder>` before any credential or network work.
     crate::providers::imap::message_id(&request.id)?;
 
-    // Cancellation is observed here, before the file is created: if this future
-    // is dropped or refused, nothing is written. Once the write below commits,
-    // success is returned even if a cancellation arrives afterwards — a
-    // committed file is never reported as a failure.
-    let fetched = adapter.raw(&request.account, &request.id).await?;
+    let mut guard = ControlGuard::new(&request.account.id, control);
+    let result = run_export(&request, adapter, downloads, limits, control).await;
+    // `Ok` means the complete file is committed. A cancellation that lost the
+    // race must not also be reported as a failure, and the guard must not
+    // cancel the provider fetch that produced the file.
+    if result.is_ok() {
+        guard.disarm();
+    }
+    result
+}
+
+async fn run_export(
+    request: &ExportRequest,
+    adapter: &impl ExportAdapter,
+    downloads: &Path,
+    limits: &ExportLimits,
+    control: &ExportControl,
+) -> Result<Value, &'static str> {
+    let deadline = tokio::time::Instant::now() + EXPORT_DEADLINE;
+    if control.cancel.is_cancelled() {
+        return Err("request_cancelled");
+    }
+    // The ceiling and the fetch both sit under the operation deadline, and both
+    // stop as soon as a cancellation is observed.
+    let _permits = tokio::select! {
+        biased;
+        _ = control.cancel.cancelled() => return Err("request_cancelled"),
+        result = limits.acquire(&request.account.id, deadline) => result?,
+    };
+    let fetched = tokio::select! {
+        biased;
+        _ = control.cancel.cancelled() => return Err("request_cancelled"),
+        result = tokio::time::timeout_at(
+            deadline,
+            adapter.raw(&request.account, &request.id, &control.token),
+        ) => result.map_err(|_| "request_timed_out")??,
+    };
     let data = fetched["data"].as_str().ok_or("mail_export_incomplete")?;
     // Refuse an over-limit payload before decoding it.
     if data.len() > MAX_BYTES.div_ceil(3) * 4 + 1024 {
@@ -56,6 +273,16 @@ pub(crate) async fn export_with(
     let bytes = decode(data)?;
     if bytes.len() > MAX_BYTES {
         return Err("mail_export_too_large");
+    }
+
+    // The commit point is the exclusive create. A cancellation or a deadline
+    // observed before it leaves no file; once the write starts it is not
+    // interruptible and the operation returns success.
+    if control.cancel.is_cancelled() {
+        return Err("request_cancelled");
+    }
+    if tokio::time::Instant::now() >= deadline {
+        return Err("request_timed_out");
     }
 
     let filename = export_filename(&request.suggested_name);
@@ -223,16 +450,74 @@ mod tests {
             &'a self,
             _account: &'a Account,
             _id: &'a str,
+            _request_token: &'a str,
         ) -> Pin<Box<dyn Future<Output = Result<Value, &'static str>> + Send + 'a>> {
             let payload = self.payload.clone();
             Box::pin(async move { Ok(payload) })
         }
     }
 
+    /// A fetch that stays in flight long enough for another export to be
+    /// attempted, and records how many ran at once.
+    struct Counting {
+        current: Arc<AtomicUsize>,
+        peak: Arc<AtomicUsize>,
+    }
+    impl Counting {
+        fn new() -> Self {
+            Self {
+                current: Arc::new(AtomicUsize::new(0)),
+                peak: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+    }
+    impl ExportAdapter for Counting {
+        fn raw<'a>(
+            &'a self,
+            _account: &'a Account,
+            _id: &'a str,
+            _request_token: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, &'static str>> + Send + 'a>> {
+            let current = self.current.clone();
+            let peak = self.peak.clone();
+            Box::pin(async move {
+                let now = current.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                current.fetch_sub(1, Ordering::SeqCst);
+                let bytes = b"Subject: hi\r\n\r\nbody";
+                Ok(json!({"bytes": bytes.len(), "data": STANDARD.encode(bytes)}))
+            })
+        }
+    }
+
+    /// A fetch that never answers, so the operation deadline is what ends it.
+    struct Hanging {
+        started: Arc<Notify>,
+    }
+    impl ExportAdapter for Hanging {
+        fn raw<'a>(
+            &'a self,
+            _account: &'a Account,
+            _id: &'a str,
+            _request_token: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, &'static str>> + Send + 'a>> {
+            let started = self.started.clone();
+            Box::pin(async move {
+                started.notify_one();
+                std::future::pending::<Result<Value, &'static str>>().await
+            })
+        }
+    }
+
     fn request() -> ExportRequest {
+        request_for("imap:person@example.test")
+    }
+
+    fn request_for(account: &str) -> ExportRequest {
         ExportRequest {
             account: Account {
-                id: "imap:person@example.test".into(),
+                id: account.into(),
                 provider: Provider::Imap,
             },
             id: "42:INBOX".into(),
@@ -242,7 +527,17 @@ mod tests {
 
     async fn run(payload: Value) -> Result<Value, &'static str> {
         let dir = scratch("run");
-        let result = export_with(request(), &Fake { payload }, &dir, &Value::Null).await;
+        let limits = ExportLimits::new();
+        let control = ExportControl::new();
+        let result = export_with(
+            request(),
+            &Fake { payload },
+            &dir,
+            &Value::Null,
+            &limits,
+            &control,
+        )
+        .await;
         fs::remove_dir_all(dir).ok();
         result
     }
@@ -270,9 +565,18 @@ mod tests {
         let dir = scratch("commit");
         let bytes = b"Subject: hi\r\n\r\nbody \xc3\xa9";
         let payload = json!({"bytes": bytes.len(), "data": STANDARD.encode(bytes)});
-        let result = export_with(request(), &Fake { payload }, &dir, &Value::Null)
-            .await
-            .unwrap();
+        let limits = ExportLimits::new();
+        let control = ExportControl::new();
+        let result = export_with(
+            request(),
+            &Fake { payload },
+            &dir,
+            &Value::Null,
+            &limits,
+            &control,
+        )
+        .await
+        .unwrap();
         assert_eq!(result["accountId"], "imap:person@example.test");
         assert_eq!(result["messageId"], "42:INBOX");
         assert_eq!(result["filename"], "Project update.eml");
@@ -289,9 +593,118 @@ mod tests {
         let mut request = request();
         request.account.provider = Provider::Gmail;
         assert_eq!(
-            export_with(request, &Fake { payload: json!({}) }, &dir, &Value::Null).await,
+            export_with(
+                request,
+                &Fake { payload: json!({}) },
+                &dir,
+                &Value::Null,
+                &ExportLimits::new(),
+                &ExportControl::new(),
+            )
+            .await,
             Err("mail_export_unsupported")
         );
+        assert!(fs::read_dir(&dir).unwrap().next().is_none());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    // One account exports one message at a time, however many RPC clients ask.
+    #[tokio::test]
+    async fn at_most_one_export_runs_per_account() {
+        let dir = scratch("per-account");
+        let limits = ExportLimits::new();
+        let control = ExportControl::new();
+        let adapter = Counting::new();
+        let results = futures_util::future::join_all((0..3).map(|_| {
+            export_with(
+                request(),
+                &adapter,
+                &dir,
+                &Value::Null,
+                &limits,
+                &control,
+            )
+        }))
+        .await;
+        assert!(results.iter().all(Result::is_ok), "every export committed");
+        assert_eq!(adapter.peak.load(Ordering::SeqCst), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    // Two accounts may run together; a third waits for one of them.
+    #[tokio::test]
+    async fn at_most_two_exports_run_across_accounts() {
+        let dir = scratch("global");
+        let limits = ExportLimits::new();
+        let control = ExportControl::new();
+        let adapter = Counting::new();
+        let results = futures_util::future::join_all(
+            ["imap:a@example.test", "imap:b@example.test", "imap:c@example.test"]
+                .map(request_for)
+                .map(|request| {
+                    export_with(
+                        request,
+                        &adapter,
+                        &dir,
+                        &Value::Null,
+                        &limits,
+                        &control,
+                    )
+                }),
+        )
+        .await;
+        assert!(results.iter().all(Result::is_ok), "every export committed");
+        assert_eq!(adapter.peak.load(Ordering::SeqCst), 2);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_export_that_reaches_the_deadline_writes_nothing() {
+        let dir = scratch("deadline");
+        let adapter = Hanging {
+            started: Arc::new(Notify::new()),
+        };
+        assert_eq!(
+            export_with(
+                request(),
+                &adapter,
+                &dir,
+                &Value::Null,
+                &ExportLimits::new(),
+                &ExportControl::new(),
+            )
+            .await,
+            Err("request_timed_out")
+        );
+        assert!(fs::read_dir(&dir).unwrap().next().is_none());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_cancellation_before_commit_writes_nothing() {
+        let started = Arc::new(Notify::new());
+        let control = ExportControl::new();
+        let cancel = control.clone();
+        let dir = scratch("cancel");
+        let worker_dir = dir.clone();
+        let worker_started = started.clone();
+        let handle = tokio::spawn(async move {
+            let adapter = Hanging {
+                started: worker_started,
+            };
+            export_with(
+                request(),
+                &adapter,
+                &worker_dir,
+                &Value::Null,
+                &ExportLimits::new(),
+                &control,
+            )
+            .await
+        });
+        started.notified().await;
+        cancel.cancel();
+        assert_eq!(handle.await.unwrap(), Err("request_cancelled"));
         assert!(fs::read_dir(&dir).unwrap().next().is_none());
         fs::remove_dir_all(dir).unwrap();
     }

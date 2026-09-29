@@ -17,10 +17,18 @@ impl crate::mail::export::ExportAdapter for ProviderExport {
         &'a self,
         account: &'a crate::mail::Account,
         id: &'a str,
+        request_token: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Value, &'static str>> + Send + 'a>> {
         Box::pin(async move {
             let (uid, folder) = crate::providers::imap::message_id(id)?;
-            let params = json!({"accountId": account.id, "folder": folder, "uid": uid});
+            // The token names this fetch in the IMAP cancel registry, so
+            // dropping the export (or `imap.cancel`) stops the socket read.
+            let params = json!({
+                "accountId": account.id,
+                "folder": folder,
+                "uid": uid,
+                "requestToken": request_token,
+            });
             imap_call("imap.rawMessage", &params).await
         })
     }
@@ -387,7 +395,16 @@ impl Session {
                 let request = ExportRequest::try_from(params)?;
                 let refusals = crate::account::refusals_readonly(&request.account.id)?;
                 let downloads = crate::platform::dirs::AppDirs::discover()?.downloads;
-                crate::mail::export::export_with(request, &ProviderExport, &downloads, &refusals).await
+                let control = crate::mail::export::ExportControl::new();
+                crate::mail::export::export_with(
+                    request,
+                    &ProviderExport,
+                    &downloads,
+                    &refusals,
+                    crate::mail::export::process_limits(),
+                    &control,
+                )
+                .await
             }
             _ => Err("unknown_method"),
         }
