@@ -2174,13 +2174,26 @@ DropArea {
       root.paste()
     }
     onSpellingCorrect: function(replacement) {
-      if (root.spellingAdapter) root.spellingAdapter.applyCorrection(textMenu.spellingPosition, replacement)
+      var adapter = root.spellingAdapter
+      if (!adapter) return
+      // The menu outlives its click: a draft can change underneath it (a reply
+      // quote arriving, an agent answer landing) while it is open. Re-check the
+      // word at the saved position before editing, so a stale position never
+      // rewrites whatever text now sits there.
+      var now = adapter.inspect(textMenu.spellingPosition)
+      if (now.word !== textMenu.spellingWord || !now.misspelled) return
+      adapter.applyCorrection(textMenu.spellingPosition, replacement)
+      // The menu owns focus while it is open, so the body's onTextChanged does
+      // not mark the edit. A correction is a user edit: dirty the draft and
+      // refresh the underlines itself.
+      root.bodyWasEdited = true
+      root.noteUserModified()
       root.refreshSpellingRanges()
     }
     onSpellingIgnore: function(word) {
       if (root.spellingAdapter) root.spellingAdapter.ignoreForSession(word)
       root.refreshSpellingRanges()
     }
-    onSpellingAddToDictionary: root.addPersonalWord(word)
+    onSpellingAddToDictionary: function(word) { root.addPersonalWord(word) }
   }
 }
