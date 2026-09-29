@@ -7,9 +7,9 @@ Updated: 2026-09-29. This file records facts; planned actions are not completed 
 - Local development checkout: `/home/chrisgray/Projects/omamail`.
 - Upstream source baseline: `2a5a26cf5559dee78291fc5e34876fc5dfd39959`.
 - Upstream remote: `https://github.com/huacnlee/omamail.git`; local upstream push URL disabled.
-- Private remote: pending GitHub authentication and creation.
-- GitHub visibility verification: pending.
-- GitHub Actions state: pending repository creation; intended disabled until F00 audit.
+- Private remote: `https://github.com/latentoperator/omamail-private.git`; repository created through the existing signed-in browser session. Initial source/plan push pending CLI reauthentication.
+- GitHub visibility verification: Private badge verified on the created repository page.
+- GitHub Actions state: disabled in repository settings and verified after saving; F00 must audit/adapt inherited workflows before enabling CI.
 - Branch protection: not configured; supervisor gate currently procedural.
 - Daily plugin and backend: unchanged by repository setup.
 - Planning documents: authored and independently reviewed; no must-fix findings. Supervisor accepted the plan for task assignment. This is not acceptance of unimplemented features.
