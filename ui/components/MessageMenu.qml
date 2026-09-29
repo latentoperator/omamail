@@ -28,6 +28,12 @@ Item {
   property real anchorX: 0
   property real anchorY: 0
   property int cursorIndex: -1
+  // The mailbox that owns the message this menu was opened on, and that
+  // mailbox's own name for it. Captured at open time: a menu can outlive an
+  // account switch, and "42:INBOX" is a different message in the next account,
+  // so resolving the owner when the row is chosen would reach the wrong mail.
+  property string ownerAccountId: ""
+  property string nativeId: ""
   readonly property var menuRows: [continueRow, replyRow, replyAllRow, forwardRow, archiveRow,
     unarchiveRow, moveRow,
     trashRow, spamRow, readRow, starRow, exportRow, browserRow, aiRow]
@@ -89,6 +95,15 @@ Item {
   function openMenu(id, sceneX, sceneY) {
     root.messageId = String(id || "")
     if (!root.summary) return
+    // Capture the owner and the provider's own id now, while the menu still
+    // names the message it was opened on. A member of a conversation is one
+    // message, so the native member id is what is kept rather than the row.
+    root.ownerAccountId = root.service
+      && typeof root.service.accountForMessage === "function"
+      ? String(root.service.accountForMessage(root.messageId) || "") : ""
+    root.nativeId = root.service && typeof root.service.sourceIdFor === "function"
+      ? String(root.service.sourceIdFor(root.messageId) || root.messageId)
+      : root.messageId
     var local = root.mapFromGlobal(sceneX, sceneY)
     anchorX = local.x
     anchorY = local.y
@@ -129,6 +144,16 @@ Item {
     menu.close()
     if (member) root.memberComposeRequested(mode, id)
     else root.composeRequested(mode, id)
+  }
+
+  // Saved through the same boundary the keyboard uses, with the account and
+  // native id captured when the menu opened rather than resolved now.
+  function exportMessage() {
+    var account = root.ownerAccountId
+    var id = root.nativeId
+    menu.close()
+    if (root.service && typeof root.service.exportEmlFor === "function")
+      root.service.exportEmlFor(account, id)
   }
 
   QQC.Popup {
@@ -252,11 +277,7 @@ Item {
         // Writes to the user's disk through the backend rather than through a
         // provider verb, so it goes straight to the service the way Open in
         // browser does.
-        onActivated: {
-          var id = root.messageId
-          menu.close()
-          if (root.service) root.service.exportEml(id)
-        }
+        onActivated: root.exportMessage()
       }
 
       MenuSeparatorLine {

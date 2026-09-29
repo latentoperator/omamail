@@ -2024,6 +2024,9 @@ Item {
     var parameters = {account: accountId, id: target, suggestedName: subjectForEml(target)}
     exportingEml = true
     exportingEmlId = target
+    // The busy state is visible from the moment the work starts, not only when
+    // a duplicate is refused or the file lands.
+    note("Saving " + (subjectForEml(target) || "message") + " as .eml…")
     backend.call("mail.exportEml", parameters, function(result, error) {
       root.exportingEml = false
       root.exportingEmlId = ""
@@ -2964,7 +2967,10 @@ Item {
   Timer {
     id: noticeTimer
     interval: 4000
-    onTriggered: root.actionStatus = ""
+    // A busy notice has to outlive the timer: an export can take longer than
+    // four seconds, and a status line that blanked mid-write would look idle
+    // while the file was still being fetched.
+    onTriggered: if (!root.exportingEml) root.actionStatus = ""
   }
 
 

@@ -4,7 +4,8 @@ import "../../components" as Omamail
 
 // "Save as .eml" in the message menu: it appears only where the service says
 // the provider and the connected backend can do it, and choosing it asks the
-// service for that exact message rather than routing through a provider verb.
+// service for the account and native id captured when the menu opened rather
+// than resolving them against whatever mailbox is on screen when it is chosen.
 Item {
   width: 500
   height: 500
@@ -18,10 +19,26 @@ Item {
     property bool hasLabels: false
     property string rawLabelId: ""
     property bool exportable: true
-    property var exportedIds: []
+    property var exported: []
     property var messages: []
+    property var memberSummaries: ({})
+    property string ada: "imap:ada@example.org"
+    // The menu captures the owner and the provider's own id at open time. A
+    // row id belongs to the visible mailbox; a member id in this fixture is
+    // composed as `<account>/<native>` so the two answers are distinguishable.
     function canExportEmlFor(id) { return exportable }
-    function exportEml(id) { exportedIds = exportedIds.concat([String(id)]); return true }
+    function accountForMessage(id) {
+      var at = String(id).indexOf("/")
+      return at > 0 ? String(id).substring(0, at) : ada
+    }
+    function sourceIdFor(id) {
+      var at = String(id).indexOf("/")
+      return at > 0 ? String(id).substring(at + 1) : String(id)
+    }
+    function exportEmlFor(accountId, id) {
+      exported = exported.concat([{ account: String(accountId), id: String(id) }])
+      return true
+    }
   }
 
   Omamail.MessageMenu {
@@ -49,11 +66,30 @@ Item {
         isSent: false, isDraft: false, labelIds: [] }
     }
 
+    function memberSummary(id) {
+      var value = summary()
+      value.id = id
+      value.sourceId = "42:INBOX"
+      return value
+    }
+
     function show() {
       fakeService.messages = [summary()]
-      fakeService.exportedIds = []
+      fakeService.memberSummaries = ({})
+      fakeService.exported = []
       menu.close()
       menu.openAt("42:INBOX", 100, 100)
+      wait(20)
+    }
+
+    function showMember(id) {
+      fakeService.messages = []
+      var members = ({})
+      members[id] = memberSummary(id)
+      fakeService.memberSummaries = members
+      fakeService.exported = []
+      menu.close()
+      menu.openForMember(id, 100, 100)
       wait(20)
     }
 
@@ -71,12 +107,24 @@ Item {
         "a provider or backend without export must not offer the row")
     }
 
-    function test_choosing_it_asks_the_service_for_that_message() {
+    function test_choosing_it_routes_the_owning_account_and_message() {
       fakeService.exportable = true
       show()
       exportRow().activated()
-      compare(fakeService.exportedIds, ["42:INBOX"])
+      compare(fakeService.exported, [{ account: fakeService.ada, id: "42:INBOX" }])
       compare(menu.opened, false, "the menu closes on choosing")
+    }
+
+    // A stop on the conversation rail is one message, and its id is the
+    // composed member id. The menu keeps the account and the member's native
+    // id, so the export reaches that member rather than the list's root row.
+    function test_a_member_menu_routes_the_member_id() {
+      fakeService.exportable = true
+      showMember(fakeService.ada + "/17:INBOX")
+      compare(exportRow().visible, true)
+      exportRow().activated()
+      compare(fakeService.exported, [{ account: fakeService.ada, id: "17:INBOX" }],
+        "the native member id, not the composed rail id")
     }
   }
 }

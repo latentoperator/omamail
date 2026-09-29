@@ -2179,9 +2179,53 @@ Item {
     if (!host) host = current
     return !!host && host.canExportEml
   }
-  function exportEml(id) {
+  // The mailbox that owns a message id. A merged id carries its owner; a bare
+  // native id belongs to the mailbox on screen. The message menu captures this
+  // when it opens, so a later account switch cannot re-route the action.
+  function accountForMessage(id) {
     var host = hostForId(id)
-    return host ? host.exportEml(sourceIdFor(id)) : false
+    return host ? String(host.accountId || "") : ""
+  }
+  // The dispatch boundary every export entry point goes through. `accountId`
+  // and `id` are the owning mailbox and that mailbox's own name for the
+  // message, captured by a caller that must keep them across an account
+  // switch. A non-unified view refuses when the captured mailbox is no longer
+  // the one on screen: 42:INBOX is a different message in the next account.
+  function exportEmlFor(accountId, id) {
+    var target = String(id || "")
+    if (target === "") return false
+    if (!backendCanExportEml) {
+      fail("Saving .eml needs a newer Omamail backend")
+      return false
+    }
+    var owner = String(accountId || "") === "" ? current : findAccount(String(accountId))
+    if (!owner) {
+      fail("That mailbox is no longer set up, so nothing was saved")
+      return false
+    }
+    if (!unified && owner !== current) {
+      fail("That message is no longer on screen, so nothing was saved")
+      return false
+    }
+    if (!owner.ready) {
+      owner.fail("Sign in before saving a message as .eml")
+      return false
+    }
+    if (!owner.canExportEml) {
+      owner.fail("This mailbox cannot save messages as .eml")
+      return false
+    }
+    return owner.exportEml(target)
+  }
+  function exportEml(id) {
+    if (!canExportEmlFor(id)) {
+      fail("This mailbox cannot save messages as .eml")
+      return false
+    }
+    var host = hostForId(id)
+    if (!host) host = current
+    if (!host) return false
+    return exportEmlFor(host.accountId, sourceIdFor(id))
   }
   // Save as .eml from the keyboard: the reader's open message, else the list's
   // cursor row. Resolved here so App.qml stays a one-line case like the rest.
