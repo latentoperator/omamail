@@ -1,6 +1,7 @@
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use std::io::{self, BufRead, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -26,6 +27,7 @@ pub fn serve(input: impl BufRead, mut output: impl Write + Send) -> io::Result<(
     let session = super::Session::default();
     let (sender, receiver) = mpsc::channel::<Frame>(16);
     let (responses, mut completed) = mpsc::channel::<Value>(2);
+    let cancel_pending = Arc::new(AtomicBool::new(false));
     let end = std::thread::scope(|scope| -> io::Result<End> {
         let writer = scope.spawn(|| -> io::Result<()> {
             while let Some(value) = completed.blocking_recv() {
@@ -33,8 +35,14 @@ pub fn serve(input: impl BufRead, mut output: impl Write + Send) -> io::Result<(
             }
             Ok(())
         });
-        let dispatcher =
-            scope.spawn(|| runtime.block_on(process_frames(receiver, responses, &session)));
+        let dispatcher = scope.spawn(|| {
+            runtime.block_on(process_frames(
+                receiver,
+                responses,
+                &session,
+                cancel_pending.clone(),
+            ))
+        });
         let result = read_frames(input, |bytes| {
             sender
                 .blocking_send(Frame {
@@ -43,6 +51,12 @@ pub fn serve(input: impl BufRead, mut output: impl Write + Send) -> io::Result<(
                 })
                 .map_err(|_| io::Error::other("dispatcher stopped"))
         });
+        // An input error means the peer can no longer receive responses (the
+        // stdio layer reports a closed output pipe as a BrokenPipe read error),
+        // so accepted work is cancelled instead of drained: a drained export
+        // could commit a file the client can never read. A clean EOF or a quit
+        // drains.
+        cancel_pending.store(result.is_err(), Ordering::SeqCst);
         drop(sender);
         let dispatched = dispatcher
             .join()
@@ -74,13 +88,14 @@ async fn process_frames(
     receiver: mpsc::Receiver<Frame>,
     responses: mpsc::Sender<Value>,
     session: &super::Session,
+    cancel_pending: Arc<AtomicBool>,
 ) -> io::Result<()> {
     // Subscribe before accepting frames: the initial watch check may finish
     // before its RPC response, but its notification must still reach the writer.
     let mut notifications = session.mail.subscribe();
     let mut outbox_notifications = session.outbox.subscribe();
     let mut gmail_notifications = session.gmail.subscribe();
-    let scheduler = schedule(receiver, responses.clone(), |frame| async move {
+    let scheduler = schedule(receiver, responses.clone(), cancel_pending, |frame| async move {
         super::rpc::handle(&frame.bytes, session, frame.deadline)
             .await
             .0
@@ -123,6 +138,7 @@ async fn process_frames(
 async fn schedule<F, Fut>(
     mut receiver: mpsc::Receiver<Frame>,
     responses: mpsc::Sender<Value>,
+    cancel_pending: Arc<AtomicBool>,
     handle: F,
 ) -> io::Result<()>
 where
@@ -136,7 +152,16 @@ where
             frame = receiver.recv(), if !closed && pending.len() < MAX_IN_FLIGHT => {
                 match frame {
                     Some(frame) => pending.push(handle(frame)),
-                    None => closed = true,
+                    None => {
+                        // The channel closed. A quit drains accepted work; a
+                        // disconnect cancels it so a half-finished request
+                        // (e.g. an export) does not commit on its own.
+                        if cancel_pending.load(Ordering::SeqCst) {
+                            pending.clear();
+                            return Ok(());
+                        }
+                        closed = true;
+                    }
                 }
             }
             response = pending.next(), if !pending.is_empty() => {
@@ -395,7 +420,7 @@ mod tests {
 #[cfg(test)]
 mod scheduling_tests {
     use super::*;
-    use std::sync::{Arc, atomic::AtomicUsize};
+    use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize}};
     use tokio::sync::Semaphore;
 
     #[tokio::test]
@@ -418,7 +443,8 @@ mod scheduling_tests {
         session.mail.watch_for_test("one").await;
         let (sender, receiver) = mpsc::channel(2);
         let (responses, mut output) = mpsc::channel(2);
-        let dispatcher = process_frames(receiver, responses, &session);
+        let dispatcher =
+            process_frames(receiver, responses, &session, Arc::new(AtomicBool::new(false)));
         let client = async {
             sender
                 .send(Frame {
@@ -473,7 +499,7 @@ mod scheduling_tests {
         let task = tokio::spawn({
             let gate = gate.clone();
             let started = started.clone();
-            schedule(receiver, responses, move |frame| {
+            schedule(receiver, responses, Arc::new(AtomicBool::new(false)), move |frame| {
                 let gate = gate.clone();
                 let started = started.clone();
                 async move {
@@ -518,7 +544,7 @@ mod scheduling_tests {
         drop(sender);
         let task = tokio::spawn({
             let gate = gate.clone();
-            schedule(receiver, responses, move |frame| {
+            schedule(receiver, responses, Arc::new(AtomicBool::new(false)), move |frame| {
                 let gate = gate.clone();
                 let entered = entered.clone();
                 async move {
@@ -546,5 +572,49 @@ mod scheduling_tests {
             count += 1;
         }
         assert_eq!(count, 33);
+    }
+
+    #[tokio::test]
+    async fn disconnect_cancels_accepted_work_instead_of_draining_it() {
+        let (sender, receiver) = mpsc::channel(16);
+        let (responses, mut output) = mpsc::channel(16);
+        let dropped = Arc::new(AtomicBool::new(false));
+        sender
+            .send(Frame {
+                bytes: vec![1],
+                deadline: tokio::time::Instant::now() + REQUEST_TIMEOUT,
+            })
+            .await
+            .unwrap();
+        let cancel_pending = Arc::new(AtomicBool::new(true));
+        drop(sender);
+        let task = tokio::spawn({
+            let dropped = dropped.clone();
+            schedule(receiver, responses, cancel_pending, move |_frame| {
+                struct Marker(Arc<AtomicBool>);
+                impl Drop for Marker {
+                    fn drop(&mut self) {
+                        self.0.store(true, Ordering::SeqCst);
+                    }
+                }
+                // Created in the closure and moved into the future, so it is
+                // dropped whenever the future is dropped -- even before first
+                // poll.
+                let marker = Marker(dropped.clone());
+                async move {
+                    let _marker = marker;
+                    std::future::pending::<Option<Value>>().await
+                }
+            })
+        });
+        task.await.unwrap().unwrap();
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "accepted work must be dropped, not drained, on disconnect"
+        );
+        assert!(
+            output.recv().await.is_none(),
+            "no response may be written after a disconnect"
+        );
     }
 }

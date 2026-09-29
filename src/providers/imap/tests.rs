@@ -656,6 +656,32 @@ async fn raw_message_refuses_a_non_ok_completion() {
 }
 
 #[tokio::test]
+async fn raw_message_refuses_an_over_limit_literal_before_reading_it() {
+    let (listener, port) = server().await;
+    let server_task = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut w: Wire = BufReader::new(Box::new(socket));
+        login_and_examine(&mut w).await;
+        assert!(line(&mut w).await.unwrap().starts_with(b"O1 UID FETCH 1 "));
+        // Announce a literal one byte over the export limit and send nothing
+        // further: the export must refuse at framing, without consuming the
+        // literal (which is never transmitted).
+        let announced = crate::mail::export::MAX_BYTES + 1;
+        write(
+            &mut w,
+            format!("* 1 FETCH (UID 1 BODY[] {{{announced}}}\r\n").as_bytes(),
+        )
+        .await
+        .unwrap();
+    });
+    assert_eq!(
+        call("imap.rawMessage", &export_params(port, 1)).await,
+        Err("mail_export_too_large")
+    );
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
 async fn raw_message_rejects_a_bad_uid_before_connecting() {
     let (listener, port) = server().await;
     assert_eq!(

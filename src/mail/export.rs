@@ -251,13 +251,16 @@ pub(crate) async fn export_with(
     if !crate::providers::can(request.account.provider.id(), "emlExport", refusals) {
         return Err("mail_export_unsupported");
     }
-    // Reject a malformed `<uid>:<folder>` before any credential or network work.
-    crate::providers::imap::message_id(&request.id)?;
+    // Reject a malformed `<uid>:<folder>` before any credential or network
+    // work, and derive the canonical identity for admission. Leading zeros on
+    // the UID (e.g. "01:INBOX") must not make the same message look distinct.
+    let (uid, folder) = crate::providers::imap::message_id(&request.id)?;
+    let canonical_id = format!("{uid}:{folder}");
 
     // A repeated (account, message) request is refused, not queued behind the
     // one already saving it. This happens before the cancellation guard exists,
     // so a refusal never cancels an in-flight export that shares a control.
-    let _admission = limits.admit(&request.account.id, &request.id)?;
+    let _admission = limits.admit(&request.account.id, &canonical_id)?;
 
     let mut guard = ControlGuard::new(&request.account.id, control);
     let result = run_export(&request, adapter, downloads, limits, control).await;
@@ -322,13 +325,7 @@ async fn run_export(
         let dir = crate::platform::private_fs::directories(&downloads, &[], true)
             .map_err(|_| "mail_export_write_failed")?
             .ok_or("mail_export_write_failed")?;
-        if cancel.is_cancelled() {
-            return Err("request_cancelled");
-        }
-        if std::time::Instant::now() >= deadline_std {
-            return Err("request_timed_out");
-        }
-        write_unique_in(&downloads, &dir, &filename, &bytes)
+        write_unique_in(&downloads, &dir, &filename, &bytes, deadline_std, &cancel)
     })
     .await
     .map_err(|_| "request_cancelled")??;
@@ -386,6 +383,8 @@ fn write_unique_in(
     dir: &std::fs::File,
     filename: &str,
     bytes: &[u8],
+    deadline: std::time::Instant,
+    cancel: &Cancellation,
 ) -> Result<PathBuf, &'static str> {
     use std::{
         ffi::CString,
@@ -401,6 +400,15 @@ fn write_unique_in(
         .unwrap_or_default();
     let dir_fd = dir.as_raw_fd();
     for n in 1..1000 {
+        // Recheck the deadline and cancellation before each create attempt: a
+        // collision retry must not outlive the operation deadline or commit
+        // after a disconnect.
+        if cancel.is_cancelled() {
+            return Err("request_cancelled");
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("request_timed_out");
+        }
         let candidate = if n == 1 {
             filename.to_owned()
         } else {
@@ -443,19 +451,36 @@ fn write_unique_in(
     dir: &std::fs::File,
     filename: &str,
     bytes: &[u8],
+    deadline: std::time::Instant,
+    cancel: &Cancellation,
 ) -> Result<PathBuf, &'static str> {
+    if cancel.is_cancelled() {
+        return Err("request_cancelled");
+    }
+    if std::time::Instant::now() >= deadline {
+        return Err("request_timed_out");
+    }
     crate::platform::private_fs::write_unique(dir, filename, bytes)
         .map_err(|_| "mail_export_write_failed")
 }
 
 // Anchor the directory then create the file relative to that handle. The
 // export path calls `write_unique_in` directly so it can observe the deadline
-// between the anchor and the exclusive create; tests use this wrapper.
+// between the anchor and the exclusive create; tests use this wrapper with a
+// far-future deadline and no cancellation.
+#[cfg(test)]
 fn write_unique(directory: &Path, filename: &str, bytes: &[u8]) -> Result<PathBuf, &'static str> {
     let dir = crate::platform::private_fs::directories(directory, &[], true)
         .map_err(|_| "mail_export_write_failed")?
         .ok_or("mail_export_write_failed")?;
-    write_unique_in(directory, &dir, filename, bytes)
+    write_unique_in(
+        directory,
+        &dir,
+        filename,
+        bytes,
+        std::time::Instant::now() + Duration::from_secs(3600),
+        &Cancellation::default(),
+    )
 }
 
 #[cfg(test)]
@@ -747,6 +772,34 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    // Equivalent ids name the same message, so a second request with a leading
+    // zero on the UID is still refused as an in-flight duplicate.
+    #[tokio::test]
+    async fn equivalent_ids_share_one_admission_slot() {
+        let dir = scratch("equivalent");
+        let limits = ExportLimits::new();
+        let control = ExportControl::new();
+        let adapter = Counting::new();
+        let mut first = request();
+        first.id = "01:INBOX".into();
+        let mut second = request();
+        second.id = "1:INBOX".into();
+        let results = futures_util::future::join_all([
+            export_with(first, &adapter, &dir, &Value::Null, &limits, &control),
+            export_with(second, &adapter, &dir, &Value::Null, &limits, &control),
+        ])
+        .await;
+        let ok = results.iter().filter(|r| r.is_ok()).count();
+        let refused = results
+            .iter()
+            .filter(|r| r.as_ref().err() == Some(&"mail_export_in_flight"))
+            .count();
+        assert_eq!(ok, 1, "exactly one of the equivalent ids commits");
+        assert_eq!(refused, 1, "the other is refused as in flight");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1, "one output file");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     // Different messages on one account still run one at a time.
     #[tokio::test]
     async fn one_account_exports_one_message_at_a_time() {
@@ -940,10 +993,45 @@ mod tests {
         let renamed = dir.join("Downloads-original");
         fs::rename(&target, &renamed).unwrap();
         std::os::unix::fs::symlink(&outside, &target).unwrap();
-        let _ = write_unique_in(&target, &anchored, "note.eml", b"payload").unwrap();
+        let _ = write_unique_in(
+            &target,
+            &anchored,
+            "note.eml",
+            b"payload",
+            std::time::Instant::now() + Duration::from_secs(3600),
+            &Cancellation::default(),
+        )
+        .unwrap();
         assert!(renamed.join("note.eml").exists(), "written to the anchored directory");
         assert!(!outside.join("note.eml").exists(), "not redirected through the symlink");
         assert_eq!(fs::read(renamed.join("note.eml")).unwrap(), b"payload");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    // A collision retry must not outlive the deadline: it is rechecked before
+    // each exclusive create, so an expired deadline refuses even when the first
+    // candidate name already exists.
+    #[test]
+    fn a_collision_does_not_bypass_an_expired_deadline() {
+        let dir = scratch("deadline-collision");
+        fs::write(dir.join("note.eml"), b"existing").unwrap();
+        let anchored = crate::platform::private_fs::directories(&dir, &[], true)
+            .unwrap()
+            .unwrap();
+        let result = write_unique_in(
+            &dir,
+            &anchored,
+            "note.eml",
+            b"payload",
+            std::time::Instant::now() - Duration::from_secs(1),
+            &Cancellation::default(),
+        );
+        assert_eq!(result, Err("request_timed_out"));
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            1,
+            "no extra file is created"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 }

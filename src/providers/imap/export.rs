@@ -38,12 +38,23 @@ pub(super) async fn raw_message(p: &Value, uid: u32, folder: &str) -> Result<Vec
     let (mut w, key) = acquire(p).await?;
     let result = fetch_literal(&mut w, uid, folder).await;
     release(w, key).await;
-    result
+    match result {
+        Err("mail_response_too_large") => Err("mail_export_too_large"),
+        other => other,
+    }
 }
 
 async fn fetch_literal(w: &mut Wire, uid: u32, folder: &str) -> Result<Vec<u8>> {
     command(w, &format!("EXAMINE {}", quote(folder)?)).await?;
-    let data = command(w, &format!("UID FETCH {uid} (UID BODY.PEEK[])")).await?;
+    // Bound the message literal by the export's 25 MiB product limit, so an
+    // over-limit message is refused when its length is announced rather than
+    // after the whole literal has been read into memory.
+    let data = command_limited(
+        w,
+        &format!("UID FETCH {uid} (UID BODY.PEEK[])"),
+        crate::mail::export::MAX_BYTES,
+    )
+    .await?;
     single_literal(&data, uid)
 }
 

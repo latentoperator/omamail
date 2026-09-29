@@ -65,20 +65,43 @@ impl Read for Input {
             if self.failed.load(Ordering::Acquire) {
                 return Err(io::Error::new(io::ErrorKind::BrokenPipe, "output closed"));
             }
-            let mut descriptor = libc::pollfd {
-                fd: libc::STDIN_FILENO,
-                events: libc::POLLIN,
-                revents: 0,
-            };
+            // Poll stdin for input and stdout for closure. A peer that closes
+            // its read end of the output pipe is detected here eagerly, not
+            // only on the next write, so a disconnect mid-request stops the
+            // request instead of letting it run to completion.
+            let mut descriptors = [
+                libc::pollfd {
+                    fd: libc::STDIN_FILENO,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: libc::STDOUT_FILENO,
+                    events: 0,
+                    revents: 0,
+                },
+            ];
             // The backend is the only stdin reader. Read the descriptor directly:
             // a buffered Stdin reader could contain bytes invisible to poll.
-            let ready = unsafe { libc::poll(&mut descriptor, 1, 100) };
+            let ready = unsafe {
+                libc::poll(
+                    descriptors.as_mut_ptr(),
+                    descriptors.len() as libc::nfds_t,
+                    100,
+                )
+            };
             if ready < 0 {
                 let error = io::Error::last_os_error();
                 if error.kind() == io::ErrorKind::Interrupted {
                     continue;
                 }
                 return Err(error);
+            }
+            // Any event on the stdout descriptor is an error (POLLERR, POLLHUP,
+            // or POLLNVAL): the peer can no longer receive a response.
+            if descriptors[1].revents != 0 {
+                self.failed.store(true, Ordering::Release);
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "output closed"));
             }
             if ready == 0 {
                 continue;
