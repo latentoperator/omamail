@@ -23,7 +23,7 @@ Updated: 2026-09-29. This file records facts; planned actions are not completed 
 | Task | State | Accepted candidate / evidence |
 | --- | --- | --- |
 | F00 | ACCEPTED | `880d410`; [evidence](evidence/F00.md), [judgment](https://github.com/latentoperator/omamail/pull/1) |
-| S00 | READY FOR ASSIGNMENT | F00 accepted at `880d410` |
+| S00 | READY FOR REVIEW — awaiting supervisor sign-off | `planning/decisions/S00.md` (base `d88833e`); probe `ui/tests/qml/tst_spellcheck_probe.qml` |
 | S01 | WAITING FOR S00 | — |
 | S02 | WAITING FOR S01 | — |
 | S03 | WAITING FOR S02 | — |
