@@ -28,7 +28,7 @@ Updated: 2026-09-29. This file records facts; planned actions are not completed 
 | S02 | WAITING FOR S01 | — |
 | S03 | WAITING FOR S02 | — |
 | S04 | WAITING FOR S03 | — |
-| E00 | READY FOR ASSIGNMENT | F00 accepted at `880d410` |
+| E00 | READY FOR REVIEW — awaiting supervisor sign-off | `planning/decisions/E00.md` (base `d88833e`) |
 | E01 | WAITING FOR E00 | — |
 | E02 | WAITING FOR E01 | — |
 | E03 | WAITING FOR E02 | — |
