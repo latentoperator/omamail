@@ -80,6 +80,8 @@ Read [PROJECT-PLAN.md](PROJECT-PLAN.md) and the root [AGENTS.md](../AGENTS.md) f
 
 ## S03 — Extend spelling to the subject without breaking input
 
+**DEFERRED this pass (2026-09-29):** subject spelling is skipped; see STATE.md. Do not pick this task up until the owner restores S2 to "body and subject".
+
 **Depends on:** accepted S02. **Branch:** `task/S03-subject-spelling`. **Covers:** S2–S4.
 
 **Read:** all `subjectField` references in `ComposeView.qml`, S00 decision, `docs/KEYS.md`, compose recovery and focus tests, shell `TextField` styling contract (read only).
@@ -94,7 +96,7 @@ Read [PROJECT-PLAN.md](PROJECT-PLAN.md) and the root [AGENTS.md](../AGENTS.md) f
 
 ## S04 — Add settings, dependency guidance, and spelling acceptance
 
-**Depends on:** accepted S03. **Branch:** `task/S04-spelling-settings`. **Covers:** S1–S6.
+**Depends on:** accepted S02 (S03 deferred). **Branch:** `task/S04-spelling-settings`. **Covers:** S1–S6.
 
 **Read:** settings persistence in `ui/Service.qml`, `ui/components/SettingsPage.qml`, `ui/BarWidget.qml`, `manifest.json`, standalone settings adapter, S00 decision.
 

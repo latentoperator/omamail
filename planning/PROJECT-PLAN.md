@@ -11,7 +11,7 @@ Chris wants the familiar web-mail experience of visible spelling errors while co
 | ID | Acceptance criterion |
 | --- | --- |
 | S1 | Misspelled words receive a visible wavy underline while composing a new message, reply, reply-all, or forward. The draft text itself is never decorated or rewritten by checking. |
-| S2 | Checking applies to body and subject. Address fields are excluded. The subject remains a single-line field with existing Enter-to-body and Tab navigation. |
+| S2 | Checking applies to the body; the subject and address fields are excluded. The subject remains a single-line field with existing Enter-to-body and Tab navigation. |
 | S3 | Right-clicking a misspelled word offers at most five suggestions, Ignore for this session, and Add to dictionary, alongside the existing editing commands. A correction targets the clicked word even if the caret is elsewhere. |
 | S4 | A correction can be undone through the normal editor undo command and participates correctly in dirty state and draft recovery. Merely checking, selecting, ignoring, or opening a menu never changes draft content or dirty state. |
 | S5 | American English (`en_US`) is the initial language. Checking is local, with no network or model calls. An explicit setting enables/disables spelling. Missing optional support never prevents composing; show a useful setup explanation when appropriate. |

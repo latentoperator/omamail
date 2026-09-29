@@ -23,21 +23,25 @@ Updated: 2026-09-29. This file records facts; planned actions are not completed 
 | Task | State | Accepted candidate / evidence |
 | --- | --- | --- |
 | F00 | ACCEPTED | `880d410`; [evidence](evidence/F00.md), [judgment](https://github.com/latentoperator/omamail/pull/1) |
-| S00 | READY FOR ASSIGNMENT | F00 accepted at `880d410` |
-| S01 | WAITING FOR S00 | — |
-| S02 | WAITING FOR S01 | — |
-| S03 | WAITING FOR S02 | — |
-| S04 | WAITING FOR S03 | — |
-| E00 | READY FOR ASSIGNMENT | F00 accepted at `880d410` |
-| E01 | WAITING FOR E00 | — |
-| E02 | WAITING FOR E01 | — |
-| E03 | WAITING FOR E02 | — |
+| S00 | READY FOR REVIEW | candidate `8692d4d` (local) |
+| S01 | READY FOR REVIEW | candidate `1f9f498`, on S00 (local) |
+| S02 | READY FOR REVIEW | candidate `f485bf4`, on S01 (local) |
+| S03 | DEFERRED | subject spelling skipped this pass (2026-09-29) |
+| S04 | WAITING FOR S02 | retargeted after S03 deferral |
+| E00 | READY FOR REVIEW | candidate `b730830` (local) |
+| E01 | READY FOR REVIEW | candidate `19d8a79`, on E00 (local) |
+| E02 | READY FOR REVIEW | candidate `5aa0002`, on E01 (local) |
+| E03 | READY FOR REVIEW | candidate `31f387f`, on E02 (local) |
 | I00 | WAITING FOR S04 + E03 | — |
 | R00 | WAITING FOR I00 | — |
 | J00 | WAITING FOR R00 | — |
 | D01 | WAITING FOR J00 + deployment authorization | — |
 
 Only the supervisor changes a task to ACCEPTED after recording an exact-commit judgment. Workers can report READY FOR REVIEW or BLOCKED with evidence. Update successor prerequisites when accepted commits are integrated.
+
+### Deferred this pass
+
+S03 (subject spelling) is deferred: the owner judged the regression risk of swapping the single-line subject field for a document-backed editor to outweigh the benefit, matching common mail-client behaviour. S2 now reads "body only". To un-defer, restore S2's "body and subject" wording and re-add S03 before S04 is integrated.
 
 ## Known pre-existing observations
 
