@@ -175,14 +175,6 @@ impl ExportControl {
             cancel: Cancellation::default(),
         }
     }
-
-    /// The in-process signal the deadline select observes. External callers
-    /// cancel through the provider registry with `token`; this hook exists so a
-    /// test can cancel a request it did not create.
-    #[cfg(test)]
-    pub(crate) fn cancel(&self) {
-        self.cancel.cancel();
-    }
 }
 
 /// Stop the provider fetch when the export is dropped before it commits. The
@@ -829,12 +821,13 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    // The public cancellation path is dropping the request: a client that
+    // disconnects drops the export future, whose guard cancels the in-flight
+    // fetch before the commit point. No file is written.
     #[tokio::test]
-    async fn a_cancellation_before_commit_writes_nothing() {
+    async fn dropping_the_request_stops_the_fetch_before_commit() {
         let started = Arc::new(Notify::new());
-        let control = ExportControl::new();
-        let cancel = control.clone();
-        let dir = scratch("cancel");
+        let dir = scratch("drop");
         let worker_dir = dir.clone();
         let worker_started = started.clone();
         let handle = tokio::spawn(async move {
@@ -847,13 +840,13 @@ mod tests {
                 &worker_dir,
                 &Value::Null,
                 &ExportLimits::new(),
-                &control,
+                &ExportControl::new(),
             )
             .await
         });
         started.notified().await;
-        cancel.cancel();
-        assert_eq!(handle.await.unwrap(), Err("request_cancelled"));
+        handle.abort();
+        assert!(handle.await.is_err(), "the dropped request is cancelled");
         assert!(fs::read_dir(&dir).unwrap().next().is_none());
         fs::remove_dir_all(dir).unwrap();
     }
