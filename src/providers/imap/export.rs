@@ -47,11 +47,16 @@ async fn fetch_literal(w: &mut Wire, uid: u32, folder: &str) -> Result<Vec<u8>> 
     single_literal(&data, uid)
 }
 
-/// Exactly one literal for the requested UID. Unsolicited records for other
-/// UIDs are ignored; a missing record, a `NIL` body, or two literals for the
-/// requested UID are refused. The literal is length-framed, so a payload that
-/// merely looks like a tagged completion or another FETCH record cannot be
-/// mistaken for one.
+/// Exactly one full `BODY[]` literal for the requested UID. Unsolicited records
+/// for other UIDs are ignored; a missing record, a `NIL` body, a partial
+/// section such as `BODY[HEADER]`, a list-valued body, a duplicated field, or
+/// two literals for the requested UID are refused. The literal is length-framed,
+/// so a payload that merely looks like a tagged completion or another FETCH
+/// record cannot be mistaken for one.
+///
+/// A partial section and a second body field are refusals rather than
+/// overwrites: the saved file would otherwise report success while holding
+/// something that is not the complete original message.
 fn single_literal(data: &[u8], uid: u32) -> Result<Vec<u8>> {
     let mut found: Option<Vec<u8>> = None;
     for row in read::nodes(data)? {
@@ -59,28 +64,48 @@ fn single_literal(data: &[u8], uid: u32) -> Result<Vec<u8>> {
             continue;
         }
         let fields = row[3].list();
-        let mut row_uid = None;
-        let mut body: Option<Option<Vec<u8>>> = None;
+        let mut row_uid: Option<u32> = None;
+        let mut uid_fields = 0usize;
+        let mut bodies: Vec<Option<Vec<u8>>> = Vec::new();
+        let mut malformed = false;
         let mut i = 0;
         while i + 1 < fields.len() {
-            let key = &fields[i];
+            let name = fields[i].text();
             let value = &fields[i + 1];
-            if key.is("UID") {
+            if name.eq_ignore_ascii_case(b"UID") {
+                uid_fields += 1;
                 row_uid = value.number();
-            } else if key.text().to_ascii_uppercase().starts_with(b"BODY[") {
-                // `BODY[] NIL` is a present but empty body, not a literal.
-                body = Some(if value.is("NIL") {
-                    None
+            } else if name.eq_ignore_ascii_case(b"BODY[]") {
+                // A list-valued body is not a literal, and reading it through
+                // `text()` would silently become empty bytes.
+                if value.is_list() {
+                    malformed = true;
                 } else {
-                    Some(value.text().to_vec())
-                });
+                    bodies.push(if value.is("NIL") {
+                        None
+                    } else {
+                        Some(value.text().to_vec())
+                    });
+                }
+            } else if name
+                .to_ascii_uppercase()
+                .starts_with(b"BODY[")
+            {
+                // `BODY[HEADER]`, `BODY[1]`, `BODY[TEXT]`, `BODY[]<0>`: any
+                // section but the whole message cannot be the whole message.
+                malformed = true;
             }
             i += 2;
         }
+        // An unsolicited record for another UID is not this message and is
+        // ignored; only the requested UID's record is judged.
         if row_uid != Some(uid) {
             continue;
         }
-        match body {
+        if malformed || uid_fields > 1 || bodies.len() > 1 {
+            return Err("mail_export_incomplete");
+        }
+        match bodies.pop() {
             Some(Some(bytes)) => {
                 if found.is_some() {
                     return Err("mail_export_incomplete");

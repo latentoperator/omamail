@@ -26,6 +26,11 @@ impl Node {
     pub(super) fn list(&self) -> &[Node] {
         if let Self::List(v) = self { v } else { &[] }
     }
+    /// A list-valued node is never a body literal. The export path needs to
+    /// refuse one rather than read it as empty bytes through `text()`.
+    pub(super) fn is_list(&self) -> bool {
+        matches!(self, Self::List(_))
+    }
     fn string(&self) -> Result<String> {
         String::from_utf8(self.text().to_vec()).map_err(|_| "imap_invalid_response")
     }

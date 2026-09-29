@@ -637,6 +637,52 @@ async fn raw_message_refuses_missing_nil_and_duplicate_bodies() {
 }
 
 #[tokio::test]
+async fn raw_message_refuses_ambiguous_and_partial_records() {
+    for (response, expected) in [
+        // Two body fields in one record: which one is the message?
+        (
+            &b"* 1 FETCH (UID 1 BODY[] {1}\r\nA BODY[] {1}\r\nB)\r\nO1 OK fetched\r\n"[..],
+            "mail_export_incomplete",
+        ),
+        // A partial section is not the whole message.
+        (
+            &b"* 1 FETCH (UID 1 BODY[HEADER] {4}\r\nAAAA)\r\nO1 OK fetched\r\n"[..],
+            "mail_export_incomplete",
+        ),
+        // A list-valued body read through `text()` would be empty bytes.
+        (
+            &b"* 1 FETCH (UID 1 BODY[] (\"a\" \"b\"))\r\nO1 OK fetched\r\n"[..],
+            "mail_export_incomplete",
+        ),
+        // The requested UID must be named exactly once.
+        (
+            &b"* 1 FETCH (UID 1 UID 1 BODY[] {1}\r\nA)\r\nO1 OK fetched\r\n"[..],
+            "mail_export_incomplete",
+        ),
+        // A record with no UID at all is not the requested message.
+        (
+            &b"* 1 FETCH (BODY[] {1}\r\nA)\r\nO1 OK fetched\r\n"[..],
+            "mail_export_message_missing",
+        ),
+    ] {
+        let (listener, port) = server().await;
+        let server_task = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut w: Wire = BufReader::new(Box::new(socket));
+            login_and_examine(&mut w).await;
+            assert!(line(&mut w).await.unwrap().starts_with(b"O1 UID FETCH 1 "));
+            w.write_all(response).await.unwrap();
+            w.flush().await.unwrap();
+        });
+        assert_eq!(
+            call("imap.rawMessage", &export_params(port, 1)).await,
+            Err(expected)
+        );
+        server_task.await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn raw_message_refuses_a_non_ok_completion() {
     let (listener, port) = server().await;
     let server_task = tokio::spawn(async move {
