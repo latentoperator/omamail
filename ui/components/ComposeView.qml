@@ -38,6 +38,21 @@ DropArea {
   property bool opened: false
   property bool userModified: false
   property bool settingBodyText: false
+  // S01 temporary inputs; S04 replaces them with persisted user settings.
+  property bool spellingEnabled: true
+  property string spellingLanguage: "en_US"
+  property var spellingPersonalWords: []
+  // Body checking is on only when the optional Sonnet adapter loaded and
+  // reports a dictionary for the requested language.
+  readonly property bool spellingAvailable: spellcheckLoader.status === Loader.Ready
+    && spellcheckLoader.item !== null && spellcheckLoader.item.available
+  readonly property string spellingStatus: spellcheckLoader.status === Loader.Error
+    ? "no-module"
+    : (spellcheckLoader.item ? spellcheckLoader.item.status
+                             : (spellingEnabled ? "loading" : "disabled"))
+  // The live adapter, or null before it loads / when disabled. Tests and the
+  // preview drive spelling through this rather than reaching into the loader.
+  readonly property var spellingAdapter: spellcheckLoader.item
   // Drafts parked for their send's undo window, oldest first, each beside
   // the name of the send it belongs to. The timer owns them while the
   // visible composer stays free for the next message.
@@ -1839,6 +1854,23 @@ DropArea {
       }
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: root.pasteKey(event)
+    }
+  }
+
+  // The spelling adapter is loaded optionally and destroyed when disabled, so
+  // a machine without org.kde.sonnet still opens the composer and a closed
+  // composer releases the highlighter. It binds to the body document and is
+  // never given a null document (Sonnet's setQuickDocument dereferences it).
+  Loader {
+    id: spellcheckLoader
+    active: root.spellingEnabled
+    source: "../compose/SpellcheckAdapter.qml"
+    onLoaded: {
+      if (!item) return
+      item.document = bodyEdit.textDocument
+      item.enabled = root.spellingEnabled
+      item.language = root.spellingLanguage
+      item.personalWords = root.spellingPersonalWords
     }
   }
 
