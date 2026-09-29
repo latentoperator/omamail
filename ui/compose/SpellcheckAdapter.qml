@@ -6,13 +6,12 @@ import org.kde.sonnet as Sonnet
 // without the module gets a load error and an editor that still works, rather
 // than a composer that refuses to open.
 //
-// The interface is frozen by planning/decisions/S00.md. Do not rename the
-// properties or functions without changing that record.
-//
-// Two Sonnet behaviours the callers must respect (S00 §2):
-//  * corrections must call suggestions() for the same position immediately
-//    before replaceWord(), or Sonnet inserts instead of replacing;
-//  * the underline colour is Qt's fixed red; misspelledColor has no effect.
+// The interface is frozen by planning/decisions/S00.md, with one later change:
+// the underline is drawn by the caller, not by Sonnet. Sonnet's QML highlighter
+// paints the misspelled word red as well as underlining it (its errorFormat
+// sets a red foreground; misspelledColor is inert), unlike the QWidget one,
+// which only underlines. So the highlighter here stays inactive and is used
+// only as a checker: it never writes any format to the document.
 Item {
   id: adapter
 
@@ -70,13 +69,50 @@ Item {
     highlighter.ignoreWord(String(word))
   }
 
+  // Every misspelled word that is finished, as UTF-16 {start, end} offsets into
+  // `text`. A word is finished only when something follows it, so the word the
+  // user is still typing is never marked: the underline appears once a
+  // delimiter (space, punctuation, newline) has been typed after it.
+  function misspelledRanges(text) {
+    var ranges = []
+    if (!available || !enabled || !text) return ranges
+    var length = text.length
+    var index = 0
+    while (index < length) {
+      if (!isWordChar(text.charAt(index))) { index += 1; continue }
+      var start = index
+      while (index < length && isWordChar(text.charAt(index))) index += 1
+      var end = index
+      // Nothing follows: this is the word still being typed. Earlier finished
+      // words have already been collected, so stop.
+      if (end >= length) break
+      var wordStart = start
+      var wordEnd = end
+      while (wordStart < wordEnd && isApostrophe(text.charAt(wordStart))) wordStart += 1
+      while (wordEnd > wordStart && isApostrophe(text.charAt(wordEnd - 1))) wordEnd -= 1
+      if (wordEnd > wordStart) {
+        var word = text.substring(wordStart, wordEnd)
+        if (highlighter.isWordMisspelled(word)) ranges.push({ start: wordStart, end: wordEnd })
+      }
+    }
+    return ranges
+  }
+
+  function isWordChar(character) {
+    // Letters and digits across the common scripts, plus the apostrophes that
+    // sit inside a word. A surrogate half (an emoji) matches nothing and is
+    // skipped, so it is never treated as a word.
+    return /[0-9A-Za-z\u00C0-\u024F\u0300-\u036F\u0370-\u03FF\u0400-\u04FF'\u2019]/.test(character)
+  }
+
+  function isApostrophe(character) { return character === "'" || character === "\u2019" }
+
   function applySettings() {
     if (!available) return
     if (enabled) {
       highlighter.setCurrentLanguage(language)
       applyPersonalWords()
     }
-    highlighter.active = enabled
   }
 
   function applyPersonalWords() {
@@ -91,7 +127,9 @@ Item {
 
   Sonnet.SpellcheckHighlighter {
     id: highlighter
+    // Never active: Sonnet must not paint the document (it would colour the
+    // word red as well as underlining it). Query methods work while inactive.
     active: false
-    automatic: false // deterministic language; avoids the too-many-errors heuristic
+    automatic: false
   }
 }

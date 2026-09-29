@@ -92,6 +92,31 @@ Item {
       compare(edit.text, root.sample)
     }
 
+    function test_misspelled_ranges_are_only_finished_words() {
+      var a = adapter()
+      if (!a) return
+      // Nothing follows the word: still being typed, so not marked yet.
+      compare(a.misspelledRanges("wrod").length, 0)
+      // A delimiter finished it.
+      compare(a.misspelledRanges("wrod ").length, 1)
+      // The trailing word is skipped; the finished one before it is not.
+      var one = a.misspelledRanges("a wrod and mispelled")
+      compare(one.length, 1)
+      compare(one[0].start, 2)
+      compare(one[0].end, 6)
+      compare(a.misspelledRanges("a wrod and mispelled ").length, 2)
+    }
+
+    function test_misspelled_ranges_use_utf16_offsets() {
+      var a = adapter()
+      if (!a) return
+      // "the " is four units, the emoji is two more, so wrod starts at 7.
+      var ranges = a.misspelledRanges("the \uD83D\uDCE8 wrod ")
+      compare(ranges.length, 1)
+      compare(ranges[0].start, 7)
+      compare(ranges[0].end, 11)
+    }
+
     function test_personal_words_are_treated_as_correct() {
       var a = adapter()
       if (!a) return

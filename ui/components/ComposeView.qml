@@ -53,6 +53,30 @@ DropArea {
   // The live adapter, or null before it loads / when disabled. Tests and the
   // preview drive spelling through this rather than reaching into the loader.
   readonly property var spellingAdapter: spellcheckLoader.item
+  // Finished misspelled words as {start, end} UTF-16 offsets into the body text.
+  property var spellingRanges: []
+  // The theme's error role, drawn under misspelled words. The composer draws
+  // the underline itself because Sonnet's QML highlighter also colours the word
+  // red; see planning/decisions/S00.md and the S01 handoff.
+  property color errorColor: textColor
+
+  // A word is marked only once it is finished (something follows it), so this
+  // only has to keep up with the document; the completeness rule is what defers
+  // the underline while someone is still typing a word.
+  function refreshSpellingRanges() {
+    var adapter = spellingAdapter
+    spellingRanges = (adapter && spellingAvailable && spellingEnabled)
+      ? adapter.misspelledRanges(bodyEdit.text) : []
+  }
+  onSpellingAvailableChanged: refreshSpellingRanges()
+  onSpellingEnabledChanged: refreshSpellingRanges()
+
+  Timer {
+    id: spellingDebounce
+    interval: 120
+    repeat: false
+    onTriggered: root.refreshSpellingRanges()
+  }
   // Drafts parked for their send's undo window, oldest first, each beside
   // the name of the send it belongs to. The timer owns them while the
   // visible composer stays free for the next message.
@@ -1851,9 +1875,33 @@ DropArea {
           root.bodyWasEdited = true
           root.noteUserModified()
         }
+        spellingDebounce.restart()
       }
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: root.pasteKey(event)
+
+      // The spelling underline is drawn here, not by Sonnet, so the word is not
+      // also coloured red and the colour comes from the theme. It sits on the
+      // body item so it scrolls and wraps with the text.
+      Item {
+        id: spellingUnderlines
+        anchors.fill: parent
+        Repeater {
+          model: root.spellingRanges
+          delegate: Rectangle {
+            required property var modelData
+            readonly property rect fromRect: bodyEdit.positionToRectangle(modelData.start)
+            readonly property rect toRect: bodyEdit.positionToRectangle(Math.max(modelData.start, modelData.end - 1))
+            x: fromRect.x
+            y: fromRect.y + fromRect.height - height
+            width: Math.max(2, fromRect.y === toRect.y
+              ? toRect.x + toRect.width - fromRect.x
+              : fromRect.width)
+            height: 1
+            color: root.errorColor
+          }
+        }
+      }
     }
   }
 
@@ -1871,6 +1919,7 @@ DropArea {
       item.enabled = root.spellingEnabled
       item.language = root.spellingLanguage
       item.personalWords = root.spellingPersonalWords
+      root.refreshSpellingRanges()
     }
   }
 

@@ -2156,6 +2156,7 @@ Item {
           popupBackgroundColor: root.popupBackground
           popupBorderColor: root.popupBorder
           panelFontFamily: root.fontFamily
+          errorColor: root.urgent
           contentDirection: root.service ? root.service.contentDirection : ""
           // The stack follows the view: opening pushes, closing pops — and
           // the pop is here rather than on `closed`, because a draft parked

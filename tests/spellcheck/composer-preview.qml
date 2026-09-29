@@ -1,9 +1,10 @@
 import QtQuick
+import qs.Commons
 import "../../ui/components" as Omamail
 
-// S01 preview: the real ComposeView with the optional spelling adapter, shown
-// in a window so the underline behaviour and suggestion UX can be tuned by hand
-// without a mail account and without touching the installed plugin.
+// S01 preview: the real ComposeView with the optional spelling adapter, plus a
+// slim suggestion strip for tuning. Every colour and the font come from the
+// composer's own theme properties, so this is what the app would inherit.
 //
 // Run it on the desktop (the mock shell imports stand in for the Omarchy shell):
 //   /usr/lib/qt6/bin/qml -I ui/tests/qml/imports tests/spellcheck/composer-preview.qml
@@ -11,7 +12,7 @@ Rectangle {
   id: root
   width: 1040
   height: 780
-  color: "#101014"
+  color: compose.backgroundColor
 
   property var suggestions: []
   property string inspectedWord: ""
@@ -85,7 +86,7 @@ Rectangle {
     anchors.left: parent.left
     anchors.right: parent.right
     anchors.top: parent.top
-    anchors.bottom: panel.top
+    anchors.bottom: strip.top
     service: mailService
     textColor: "#e8e8ee"
     backgroundColor: "#101014"
@@ -95,72 +96,71 @@ Rectangle {
     popupBackgroundColor: "#1a1a1e"
     popupBorderColor: "#3c3c41"
     panelFontFamily: "sans"
+    errorColor: "#ff5555"
   }
 
+  // A slim strip, coloured from the composer's theme roles, standing in for the
+  // S02 suggestion UI while the behaviour is tuned.
   Rectangle {
-    id: panel
+    id: strip
     anchors.left: parent.left
     anchors.right: parent.right
     anchors.bottom: parent.bottom
-    height: 140
-    color: "#1a1a1e"
+    height: Style.space(30)
+    color: compose.popupBackgroundColor
 
-    Column {
+    Rectangle {
+      anchors.top: parent.top
+      width: parent.width
+      height: 1
+      color: compose.popupBorderColor
+    }
+
+    Row {
       anchors.fill: parent
-      anchors.margins: 12
-      spacing: 8
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(10)
+      spacing: Style.space(10)
 
       Text {
-        color: "#a9a9ae"
-        font.pixelSize: 13
-        text: "spelling: " + root.adapterStatus +
-              "   word: " + (root.inspectedWord === "" ? "(caret not in a word)" : root.inspectedWord) +
-              (root.inspectedMisspelled ? "  [misspelled]" : "")
+        anchors.verticalCenter: parent.verticalCenter
+        color: compose.dimColor
+        font.family: compose.panelFontFamily
+        font.pixelSize: Style.font.caption
+        text: inspectedWord === ""
+              ? (adapterStatus === "ready" ? "" : "spelling: " + adapterStatus)
+              : (inspectedMisspelled ? inspectedWord : "")
       }
 
-      Row {
-        spacing: 6
-        Repeater {
-          model: root.suggestions
-          Rectangle {
-            width: suggestionLabel.implicitWidth + 16
-            height: 28
-            radius: 4
-            color: "#2a2a30"
-            Text { id: suggestionLabel; anchors.centerIn: parent; color: "#e8e8ee"; text: modelData }
-            MouseArea { anchors.fill: parent; onClicked: root.correct(modelData) }
-          }
-        }
-      }
-
-      Row {
-        spacing: 12
-
-        Rectangle {
-          width: toggleLabel.implicitWidth + 16
-          height: 28
-          radius: 4
-          color: "#2a2a30"
-          Text { id: toggleLabel; anchors.centerIn: parent; color: "#e8e8ee"
-                 text: compose.spellingEnabled ? "spelling: on" : "spelling: off" }
-          MouseArea { anchors.fill: parent; onClicked: { compose.spellingEnabled = !compose.spellingEnabled; root.refresh() } }
-        }
-
-        Rectangle {
-          width: ignoreLabel.implicitWidth + 16
-          height: 28
-          radius: 4
-          color: "#2a2a30"
-          Text { id: ignoreLabel; anchors.centerIn: parent; color: "#e8e8ee"; text: "ignore for session" }
-          MouseArea { anchors.fill: parent; onClicked: root.ignoreWord() }
+      Repeater {
+        model: root.suggestions
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          color: compose.accentColor
+          font.family: compose.panelFontFamily
+          font.pixelSize: Style.font.caption
+          text: modelData
+          MouseArea { anchors.fill: parent; onClicked: root.correct(modelData) }
         }
       }
 
       Text {
-        color: "#737377"
-        font.pixelSize: 12
-        text: "Type in the body; red underlines mark misspellings (Qt's fixed red — S00 D1). " +
-              "Caret in a word shows suggestions; Ctrl+Z undoes a correction."
+        anchors.verticalCenter: parent.verticalCenter
+        visible: root.inspectedMisspelled && root.inspectedWord !== ""
+        color: compose.dimColor
+        font.family: compose.panelFontFamily
+        font.pixelSize: Style.font.caption
+        text: "ignore"
+        MouseArea { anchors.fill: parent; onClicked: root.ignoreWord() }
+      }
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        color: compose.dimColor
+        font.family: compose.panelFontFamily
+        font.pixelSize: Style.font.caption
+        text: compose.spellingEnabled ? "spelling on" : "spelling off"
+        MouseArea { anchors.fill: parent; onClicked: { compose.spellingEnabled = !compose.spellingEnabled; root.refresh() } }
       }
     }
   }

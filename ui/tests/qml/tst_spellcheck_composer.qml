@@ -94,6 +94,21 @@ Item {
       compare(body.text, before)
     }
 
+    function test_underline_ranges_require_a_finished_word() {
+      var body = named(compose, "compose-body-editor")
+      verify(body)
+      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      if (!compose.spellingAvailable) { skip("spelling unavailable"); return }
+      body.text = "a wrod"
+      wait(250) // past the debounce
+      compare(compose.spellingRanges.length, 0)
+      body.text = "a wrod "
+      wait(250)
+      compare(compose.spellingRanges.length, 1)
+      compare(compose.spellingRanges[0].start, 2)
+      compare(compose.spellingRanges[0].end, 6)
+    }
+
     function test_disabling_unloads_the_adapter_and_re_enabling_restores_it() {
       tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
       compose.spellingEnabled = false
