@@ -1,11 +1,30 @@
 use super::Session;
-use crate::mail::{ActRequest, ListRequest, Provider, ReadRequest, SendRequest};
+use crate::mail::{ActRequest, ExportRequest, ListRequest, Provider, ReadRequest, SendRequest};
 use serde_json::{Value, json};
 use std::{future::Future, pin::Pin};
 
 #[cfg(test)]
 #[path = "mail_action_tests.rs"]
 mod action_tests;
+
+/// Supplies E01's raw retrieval to the export service. Credentials are resolved
+/// by the IMAP layer from the account id, as every other provider call does, so
+/// no secret passes through the export path.
+struct ProviderExport;
+
+impl crate::mail::export::ExportAdapter for ProviderExport {
+    fn raw<'a>(
+        &'a self,
+        account: &'a crate::mail::Account,
+        id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, &'static str>> + Send + 'a>> {
+        Box::pin(async move {
+            let (uid, folder) = crate::providers::imap::message_id(id)?;
+            let params = json!({"accountId": account.id, "folder": folder, "uid": uid});
+            imap_call("imap.rawMessage", &params).await
+        })
+    }
+}
 
 struct ProviderList<'a> {
     session: &'a Session,
@@ -363,6 +382,12 @@ impl Session {
                     &ProviderMutation { session: self },
                 )
                 .await
+            }
+            "mail.exportEml" => {
+                let request = ExportRequest::try_from(params)?;
+                let refusals = crate::account::refusals_readonly(&request.account.id)?;
+                let downloads = crate::platform::dirs::AppDirs::discover()?.downloads;
+                crate::mail::export::export_with(request, &ProviderExport, &downloads, &refusals).await
             }
             _ => Err("unknown_method"),
         }

@@ -30,7 +30,7 @@ Updated: 2026-09-29. This file records facts; planned actions are not completed 
 | S04 | WAITING FOR S03 | — |
 | E00 | READY FOR REVIEW — awaiting supervisor sign-off | `planning/decisions/E00.md` (base `d88833e`) |
 | E01 | READY FOR REVIEW — awaiting supervisor sign-off | `planning/evidence/E01.md` (base `b730830`) |
-| E02 | WAITING FOR E01 | — |
+| E02 | READY FOR REVIEW — awaiting supervisor sign-off | `planning/evidence/E02.md` (base `19d8a79`) |
 | E03 | WAITING FOR E02 | — |
 | I00 | WAITING FOR S04 + E03 | — |
 | R00 | WAITING FOR I00 | — |
