@@ -1942,13 +1942,16 @@ DropArea {
           model: root.spellingRanges
           delegate: Rectangle {
             required property var modelData
+            // positionToRectangle gives the caret at a position (width 1), so
+            // the right edge of the word is the caret one past its last
+            // character, not the last character's own rectangle.
             readonly property rect fromRect: bodyEdit.positionToRectangle(modelData.start)
-            readonly property rect toRect: bodyEdit.positionToRectangle(Math.max(modelData.start, modelData.end - 1))
+            readonly property rect toRect: bodyEdit.positionToRectangle(modelData.end)
             x: fromRect.x
             y: fromRect.y + fromRect.height - height
             width: Math.max(2, fromRect.y === toRect.y
-              ? toRect.x + toRect.width - fromRect.x
-              : fromRect.width)
+              ? toRect.x - fromRect.x
+              : Math.max(fromRect.width, bodyEdit.width - fromRect.x))
             height: 1
             color: root.errorColor
           }
