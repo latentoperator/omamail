@@ -1,3 +1,5 @@
+> **Private development copy for Chris Gray.** Start with [PRIVATE-FORK.md](PRIVATE-FORK.md) and the [execution plan](planning/PROJECT-PLAN.md). Spellchecking and `.eml` export are planned, not implemented. The upstream installation instructions below install upstream Omamail; use the private deployment plan only after final review.
+
 # Omamail
 
 Omamail is a native email and calendar app with multiple accounts and keyboard navigation. It runs either as an Omarchy shell plugin or as a standalone Qt desktop application.
