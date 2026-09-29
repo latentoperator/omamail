@@ -77,6 +77,52 @@ DropArea {
     repeat: false
     onTriggered: root.refreshSpellingRanges()
   }
+
+  // Right-click: the word under the pointer, kept for the menu's spelling
+  // section. Only the body is checked; another field clears the section.
+  function prepareSpellingMenu(editor, x, y) {
+    var adapter = spellingAdapter
+    if (!adapter || !spellingAvailable || editor !== bodyEdit) {
+      textMenu.spellingPosition = -1
+      textMenu.spellingWord = ""
+      textMenu.spellingMisspelled = false
+      textMenu.spellingSuggestions = []
+      return
+    }
+    var position = editor.positionAt(x, y)
+    var info = adapter.inspect(position)
+    textMenu.spellingPosition = position
+    textMenu.spellingWord = info.word
+    textMenu.spellingMisspelled = info.misspelled
+    textMenu.spellingSuggestions = info.suggestions
+  }
+
+  // Keyboard: suggestions for the word at the caret, anchored to it. Returns
+  // false when there is nothing to offer so the key falls through.
+  function openSpellingAtCaret() {
+    var adapter = spellingAdapter
+    if (!adapter || !spellingAvailable) return false
+    var position = bodyEdit.cursorPosition
+    var info = adapter.inspect(position)
+    if (!info.misspelled || info.suggestions.length === 0) return false
+    textMenu.spellingPosition = position
+    textMenu.spellingWord = info.word
+    textMenu.spellingMisspelled = true
+    textMenu.spellingSuggestions = info.suggestions
+    var box = bodyEdit.positionToRectangle(position)
+    var scene = bodyEdit.mapToGlobal(box.x, box.y + box.height)
+    textMenu.openAt(bodyEdit, scene.x, scene.y, "")
+    return true
+  }
+
+  // App-owned personal words (S00 §4): persisted by S04, applied here.
+  function addPersonalWord(word) {
+    if (!word) return
+    var words = spellingPersonalWords.slice()
+    if (words.indexOf(word) < 0) words.push(word)
+    spellingPersonalWords = words
+  }
+  onSpellingPersonalWordsChanged: if (spellcheckLoader.item) spellcheckLoader.item.personalWords = spellingPersonalWords
   // Drafts parked for their send's undo window, oldest first, each beside
   // the name of the send it belongs to. The timer owns them while the
   // visible composer stays free for the next message.
@@ -1878,7 +1924,13 @@ DropArea {
         spellingDebounce.restart()
       }
       Keys.priority: Keys.BeforeItem
-      Keys.onPressed: root.pasteKey(event)
+      Keys.onPressed: function(event) {
+        if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_Period) {
+          if (root.openSpellingAtCaret()) event.accepted = true
+          return
+        }
+        root.pasteKey(event)
+      }
 
       // The spelling underline is drawn here, not by Sonnet, so the word is not
       // also coloured red and the colour comes from the theme. It sits on the
@@ -2098,6 +2150,7 @@ DropArea {
     acceptedButtons: Qt.RightButton
     onPressed: function(mouse) {
       var scene = parent.mapToGlobal(mouse.x, mouse.y)
+      root.prepareSpellingMenu(parent, mouse.x, mouse.y)
       textMenu.openAt(parent, scene.x, scene.y, "")
     }
   }
@@ -2117,5 +2170,14 @@ DropArea {
       if (target) target.forceActiveFocus()
       root.paste()
     }
+    onSpellingCorrect: function(replacement) {
+      if (root.spellingAdapter) root.spellingAdapter.applyCorrection(textMenu.spellingPosition, replacement)
+      root.refreshSpellingRanges()
+    }
+    onSpellingIgnore: function(word) {
+      if (root.spellingAdapter) root.spellingAdapter.ignoreForSession(word)
+      root.refreshSpellingRanges()
+    }
+    onSpellingAddToDictionary: root.addPersonalWord(word)
   }
 }

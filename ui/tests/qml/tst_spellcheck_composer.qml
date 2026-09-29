@@ -109,6 +109,76 @@ Item {
       compare(compose.spellingRanges[0].end, 6)
     }
 
+    function test_right_click_offers_suggestions_for_the_clicked_word() {
+      var body = named(compose, "compose-body-editor")
+      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      if (!compose.spellingAvailable) { skip("spelling unavailable"); return }
+      body.text = "a mispelled wrod "
+      wait(250)
+      var box = body.positionToRectangle(body.text.indexOf("mispelled"))
+      mouseClick(body, box.x + 2, box.y + box.height / 2, Qt.RightButton)
+      wait(20)
+      var menu = named(compose, "compose-text-menu")
+      verify(menu.opened, "the text menu opened")
+      compare(menu.spellingMisspelled, true)
+      compare(menu.spellingWord, "mispelled")
+      verify(menu.spellingSuggestions.length > 0)
+      // Choosing the first suggestion replaces the clicked word.
+      menu.chooseSuggestion(0)
+      wait(20)
+      verify(body.text.indexOf("mispelled") === -1)
+    }
+
+    function test_ignore_for_session_stops_marking_the_word() {
+      var body = named(compose, "compose-body-editor")
+      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      if (!compose.spellingAvailable) { skip("spelling unavailable"); return }
+      body.text = "the floobert here "
+      wait(250)
+      compare(compose.spellingRanges.length, 1)
+      var box = body.positionToRectangle(body.text.indexOf("floobert"))
+      mouseClick(body, box.x + 2, box.y + box.height / 2, Qt.RightButton)
+      wait(20)
+      var menu = named(compose, "compose-text-menu")
+      compare(menu.spellingWord, "floobert")
+      menu.ignoreWordRow.activated()
+      wait(250)
+      compare(compose.spellingRanges.length, 0)
+    }
+
+    function test_add_to_dictionary_stops_marking_the_word() {
+      var body = named(compose, "compose-body-editor")
+      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      if (!compose.spellingAvailable) { skip("spelling unavailable"); return }
+      body.text = "the blorptar here "
+      wait(250)
+      compare(compose.spellingRanges.length, 1)
+      var box = body.positionToRectangle(body.text.indexOf("blorptar"))
+      mouseClick(body, box.x + 2, box.y + box.height / 2, Qt.RightButton)
+      wait(20)
+      var menu = named(compose, "compose-text-menu")
+      compare(menu.spellingWord, "blorptar")
+      menu.addToDictionaryRow.activated()
+      wait(250)
+      compare(compose.spellingRanges.length, 0)
+    }
+
+    function test_ctrl_period_opens_suggestions_at_the_caret_word() {
+      var body = named(compose, "compose-body-editor")
+      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      if (!compose.spellingAvailable) { skip("spelling unavailable"); return }
+      body.text = "the mispelled here "
+      wait(250)
+      body.cursorPosition = body.text.indexOf("mispelled") + 2
+      body.forceActiveFocus()
+      keyClick(Qt.Key_Period, Qt.ControlModifier)
+      wait(20)
+      var menu = named(compose, "compose-text-menu")
+      verify(menu.opened, "the caret shortcut opened the menu")
+      compare(menu.spellingWord, "mispelled")
+      verify(menu.spellingSuggestions.length > 0)
+    }
+
     function test_disabling_unloads_the_adapter_and_re_enabling_restores_it() {
       tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
       compose.spellingEnabled = false
