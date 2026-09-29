@@ -86,6 +86,10 @@ DropArea {
   }
   onSpellingAvailableChanged: refreshSpellingRanges()
   onSpellingEnabledChanged: refreshSpellingRanges()
+  // A valid-to-valid language switch leaves `spellingAvailable` true, so the
+  // ranges would keep the old dictionary's underlines. Re-check after the
+  // adapter has applied the new language (the debounce lets that land first).
+  onSpellingLanguageChanged: spellingDebounce.restart()
 
   Timer {
     id: spellingDebounce

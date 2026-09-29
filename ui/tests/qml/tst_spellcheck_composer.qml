@@ -242,5 +242,38 @@ Item {
       tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
       compare(compose.spellingAvailable, true)
     }
+
+    // Switching between two *available* dictionaries must re-run the underline
+    // ranges: availability stays true, so only a language-change refresh keeps
+    // the old dictionary's underlines from lingering.
+    function test_a_valid_to_valid_language_switch_rechecks_ranges() {
+      var body = named(compose, "compose-body-editor")
+      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      if (compose.spellingStatus === "no-module") { skip("Sonnet is not installed"); return }
+
+      compose.spellingLanguage = "en_GB"
+      tryVerify(function() {
+        return compose.spellingStatus === "ready" || compose.spellingStatus === "no-dictionary"
+      }, 3000)
+      if (compose.spellingStatus !== "ready") {
+        compose.spellingLanguage = "en_US"
+        skip("en_GB dictionary unavailable"); return
+      }
+
+      // British spellings are misspelled in en_US and correct in en_GB.
+      var sample = "colour favourite cancelled organise centre metre neighbour travelling"
+      compose.spellingLanguage = "en_US"
+      body.text = sample + " "
+      wait(250)
+      var usRanges = compose.spellingRanges.length
+      verify(usRanges > 0, "en_US marks the British spellings")
+
+      compose.spellingLanguage = "en_GB"
+      wait(250)
+      var live = JSON.stringify(compose.spellingRanges)
+      var actual = JSON.stringify(compose.spellingAdapter.misspelledRanges(body.text))
+      compare(live, actual, "ranges recheck after a valid-to-valid switch")
+      verify(compose.spellingRanges.length < usRanges, "en_GB accepts the British spellings")
+    }
   }
 }
