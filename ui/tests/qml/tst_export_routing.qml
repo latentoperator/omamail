@@ -86,6 +86,8 @@ Item {
         account.auth.missingTools = []
         account.auth.passwordChecked = true
         account.auth.password = "synthetic-password"
+        account.exportingEml = false
+        account.exportingEmlId = ""
         tryCompare(account, "ready", true)
       }
     }
@@ -93,6 +95,14 @@ Item {
     function init() {
       service.applySettings({ unifiedMailboxes: false })
       fixture = BackendFixture.markReady(service, 6)
+      // Every dispatch completes, so no test inherits an in-flight flag from
+      // another. A test that wants a specific filename or an error overrides
+      // this answer or adds an error for the method.
+      fixture.answers = { "mail.exportEml": function(params) {
+        return { accountId: params.account, messageId: params.id,
+          path: "/tmp/Downloads/message.eml", filename: "message.eml", bytes: 1 }
+      } }
+      fixture.errors = ({})
       seed()
       service.backend.protocolInfo = { apiVersion: 6, protocol: 1, version: "0.0.0",
         methods: ["mail.exportEml"] }
