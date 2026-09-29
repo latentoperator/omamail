@@ -15,4 +15,4 @@ Date: 2026-09-29. Scope: private repository preparation and execution-plan docum
 
 Security verdict: **PASS for the documentation-only setup scope**. No credentials or real message data were added. Application/feature runtime security remains **NOT VERIFIED** because implementation has not begun.
 
-No build, feature test suite, spelling runtime smoke test, EML export test, or deployment was performed. Cargo/Rust/CMake prerequisites and baseline failures are assigned to F00. Remote creation/visibility/Actions verification are recorded separately in STATE after successful GitHub publication.
+No build, feature test suite, spelling runtime smoke test, EML export test, or deployment was performed. Cargo/Rust/CMake prerequisites and baseline failures are assigned to F00. The private repository was created at `latentoperator/omamail-private`; the original Git history and the planning commits were pushed to main. GitHub API checks confirmed `private: true` and Actions `enabled: false`. STATE records the completed bootstrap and pending implementation tasks.
