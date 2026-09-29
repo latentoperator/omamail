@@ -8,7 +8,7 @@ use super::{Account, ExportRequest, Provider};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     future::Future,
     path::{Path, PathBuf},
     pin::Pin,
@@ -39,6 +39,23 @@ const ACCOUNT_INFLIGHT: usize = 1;
 pub(crate) struct ExportLimits {
     global: Arc<Semaphore>,
     accounts: std::sync::Mutex<HashMap<String, Arc<Semaphore>>>,
+    in_flight: Arc<std::sync::Mutex<HashSet<(String, String)>>>,
+}
+
+/// Owns one duplicate-admission slot until the export ends. Dropping it on any
+/// exit path frees the (account, message) pair for a later request.
+struct InFlight {
+    key: (String, String),
+    set: Arc<std::sync::Mutex<HashSet<(String, String)>>>,
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.set
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&self.key);
+    }
 }
 
 impl ExportLimits {
@@ -46,6 +63,7 @@ impl ExportLimits {
         Self {
             global: Arc::new(Semaphore::new(GLOBAL_INFLIGHT)),
             accounts: std::sync::Mutex::new(HashMap::new()),
+            in_flight: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
     }
 
@@ -57,9 +75,25 @@ impl ExportLimits {
             .clone()
     }
 
-    /// Take the global permit first, then the account's. A single account can
-    /// therefore never hold both global permits, and two accounts can run
-    /// together. Both waits share the operation deadline.
+    /// Refuse a request whose (account, message) pair is already exporting,
+    /// before any scarce capacity is taken. The returned guard releases the
+    /// slot when dropped, so a later identical request is admitted again.
+    fn admit(&self, account: &str, id: &str) -> Result<InFlight, &'static str> {
+        let key = (account.to_owned(), id.to_owned());
+        let mut in_flight = self.in_flight.lock().unwrap_or_else(|error| error.into_inner());
+        if !in_flight.insert(key.clone()) {
+            return Err("mail_export_in_flight");
+        }
+        Ok(InFlight {
+            key,
+            set: self.in_flight.clone(),
+        })
+    }
+
+    /// Take the account permit first, then the global one. A queued second
+    /// request for the same account therefore holds no global permit, so it can
+    /// never starve a different account. Both waits share the operation
+    /// deadline.
     async fn acquire(
         &self,
         account: &str,
@@ -67,15 +101,15 @@ impl ExportLimits {
     ) -> Result<(OwnedSemaphorePermit, OwnedSemaphorePermit), &'static str> {
         let global = self.global.clone();
         let account = self.account(account);
-        let global = tokio::time::timeout_at(deadline, global.acquire_owned())
-            .await
-            .map_err(|_| "request_timed_out")?
-            .map_err(|_| "request_cancelled")?;
         let account = tokio::time::timeout_at(deadline, account.acquire_owned())
             .await
             .map_err(|_| "request_timed_out")?
             .map_err(|_| "request_cancelled")?;
-        Ok((global, account))
+        let global = tokio::time::timeout_at(deadline, global.acquire_owned())
+            .await
+            .map_err(|_| "request_timed_out")?
+            .map_err(|_| "request_cancelled")?;
+        Ok((account, global))
     }
 }
 
@@ -228,6 +262,11 @@ pub(crate) async fn export_with(
     // Reject a malformed `<uid>:<folder>` before any credential or network work.
     crate::providers::imap::message_id(&request.id)?;
 
+    // A repeated (account, message) request is refused, not queued behind the
+    // one already saving it. This happens before the cancellation guard exists,
+    // so a refusal never cancels an in-flight export that shares a control.
+    let _admission = limits.admit(&request.account.id, &request.id)?;
+
     let mut guard = ControlGuard::new(&request.account.id, control);
     let result = run_export(&request, adapter, downloads, limits, control).await;
     // `Ok` means the complete file is committed. A cancellation that lost the
@@ -275,29 +314,42 @@ async fn run_export(
         return Err("mail_export_too_large");
     }
 
-    // The commit point is the exclusive create. A cancellation or a deadline
-    // observed before it leaves no file; once the write starts it is not
-    // interruptible and the operation returns success.
-    if control.cancel.is_cancelled() {
-        return Err("request_cancelled");
-    }
-    if tokio::time::Instant::now() >= deadline {
-        return Err("request_timed_out");
-    }
-
     let filename = export_filename(&request.suggested_name);
-    std::fs::create_dir_all(downloads).map_err(|_| "mail_export_write_failed")?;
-    let path = write_unique(downloads, &filename, &bytes)?;
+    let fallback = filename.clone();
+    let byte_count = bytes.len();
+    let downloads = downloads.to_path_buf();
+    let deadline_std = deadline.into_std();
+    let cancel = control.cancel.clone();
+    // Storage is synchronous create/write/fsync, so it runs on a blocking
+    // worker rather than a Tokio worker. The destination directory is anchored
+    // to a descriptor before the deadline is observed, so a path swap after the
+    // check cannot redirect the write. The exclusive create is the commit
+    // point: a cancellation or an expired deadline observed before it leaves no
+    // file; after it the write completes and success is returned.
+    let path = tokio::task::spawn_blocking(move || {
+        let dir = crate::platform::private_fs::directories(&downloads, &[], true)
+            .map_err(|_| "mail_export_write_failed")?
+            .ok_or("mail_export_write_failed")?;
+        if cancel.is_cancelled() {
+            return Err("request_cancelled");
+        }
+        if std::time::Instant::now() >= deadline_std {
+            return Err("request_timed_out");
+        }
+        write_unique_in(&downloads, &dir, &filename, &bytes)
+    })
+    .await
+    .map_err(|_| "request_cancelled")??;
     let saved = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or(filename);
+        .unwrap_or(fallback);
     Ok(json!({
         "accountId": request.account.id,
         "messageId": request.id,
         "path": path,
         "filename": saved,
-        "bytes": bytes.len(),
+        "bytes": byte_count,
     }))
 }
 
@@ -332,12 +384,22 @@ pub(crate) fn export_filename(suggested: &str) -> String {
     format!("{}.eml", &stem[..end])
 }
 
+// Anchored, handle-relative exclusive create. The destination directory is
+// pinned by a descriptor so a rename/symlink swap of the path cannot redirect
+// the file; the final component is opened with O_NOFOLLOW/O_EXCL so a symlink
+// or an existing name is never followed or overwritten.
 #[cfg(unix)]
-fn write_unique(directory: &Path, filename: &str, bytes: &[u8]) -> Result<PathBuf, &'static str> {
+fn write_unique_in(
+    directory: &Path,
+    dir: &std::fs::File,
+    filename: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, &'static str> {
     use std::{
-        fs::OpenOptions,
+        ffi::CString,
+        fs::File,
         io::Write,
-        os::unix::fs::OpenOptionsExt,
+        os::fd::{AsRawFd, FromRawFd},
     };
     let path = Path::new(filename);
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
@@ -345,40 +407,63 @@ fn write_unique(directory: &Path, filename: &str, bytes: &[u8]) -> Result<PathBu
         .extension()
         .map(|s| format!(".{}", s.to_string_lossy()))
         .unwrap_or_default();
+    let dir_fd = dir.as_raw_fd();
     for n in 1..1000 {
-        let candidate = directory.join(if n == 1 {
+        let candidate = if n == 1 {
             filename.to_owned()
         } else {
             format!("{stem} ({n}){suffix}")
-        });
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&candidate)
-        {
-            Ok(mut file) => {
-                if file.write_all(bytes).and_then(|_| file.sync_all()).is_err() {
-                    let _ = std::fs::remove_file(&candidate);
-                    return Err("mail_export_write_failed");
-                }
-                return Ok(candidate);
+        };
+        let Ok(cname) = CString::new(candidate.as_bytes().to_vec()) else {
+            continue;
+        };
+        let fd = unsafe {
+            libc::openat(
+                dir_fd,
+                cname.as_ptr(),
+                libc::O_WRONLY
+                    | libc::O_CREAT
+                    | libc::O_EXCL
+                    | libc::O_NOFOLLOW
+                    | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if fd >= 0 {
+            let mut file = unsafe { File::from_raw_fd(fd) };
+            if file.write_all(bytes).and_then(|_| file.sync_all()).is_err() {
+                unsafe { libc::unlinkat(dir_fd, cname.as_ptr(), 0) };
+                return Err("mail_export_write_failed");
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => return Err("mail_export_write_failed"),
+            return Ok(directory.join(&candidate));
         }
+        if std::io::Error::last_os_error().kind() == std::io::ErrorKind::AlreadyExists {
+            continue;
+        }
+        return Err("mail_export_write_failed");
     }
     Err("mail_export_write_failed")
 }
 
 #[cfg(windows)]
+fn write_unique_in(
+    _directory: &Path,
+    dir: &std::fs::File,
+    filename: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, &'static str> {
+    crate::platform::private_fs::write_unique(dir, filename, bytes)
+        .map_err(|_| "mail_export_write_failed")
+}
+
+// Anchor the directory then create the file relative to that handle. The
+// export path calls `write_unique_in` directly so it can observe the deadline
+// between the anchor and the exclusive create; tests use this wrapper.
 fn write_unique(directory: &Path, filename: &str, bytes: &[u8]) -> Result<PathBuf, &'static str> {
     let dir = crate::platform::private_fs::directories(directory, &[], true)
         .map_err(|_| "mail_export_write_failed")?
         .ok_or("mail_export_write_failed")?;
-    crate::platform::private_fs::write_unique(&dir, filename, bytes)
-        .map_err(|_| "mail_export_write_failed")
+    write_unique_in(directory, &dir, filename, bytes)
 }
 
 #[cfg(test)]
@@ -510,6 +595,37 @@ mod tests {
         }
     }
 
+    /// Account "a" blocks on a gate; any other account returns immediately.
+    /// Proves a queued second request for "a" does not hold a global permit.
+    struct Gated {
+        a_started: Arc<Notify>,
+        b_started: Arc<Notify>,
+        gate: Arc<Semaphore>,
+    }
+    impl ExportAdapter for Gated {
+        fn raw<'a>(
+            &'a self,
+            account: &'a Account,
+            _id: &'a str,
+            _request_token: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, &'static str>> + Send + 'a>> {
+            let account = account.id.clone();
+            let a_started = self.a_started.clone();
+            let b_started = self.b_started.clone();
+            let gate = self.gate.clone();
+            Box::pin(async move {
+                if account.starts_with("imap:a") {
+                    a_started.notify_one();
+                    let _ = gate.acquire().await;
+                } else {
+                    b_started.notify_one();
+                }
+                let bytes = b"Subject: hi\r\n\r\nbody";
+                Ok(json!({"bytes": bytes.len(), "data": STANDARD.encode(bytes)}))
+            })
+        }
+    }
+
     fn request() -> ExportRequest {
         request_for("imap:person@example.test")
     }
@@ -608,10 +724,12 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
-    // One account exports one message at a time, however many RPC clients ask.
+    // A repeated request for the same message is refused, not queued: only one
+    // (account, message) pair is ever in flight, and the others get a refusal
+    // rather than waiting their turn to write a second copy.
     #[tokio::test]
-    async fn at_most_one_export_runs_per_account() {
-        let dir = scratch("per-account");
+    async fn a_duplicate_request_is_refused_not_queued() {
+        let dir = scratch("duplicate");
         let limits = ExportLimits::new();
         let control = ExportControl::new();
         let adapter = Counting::new();
@@ -626,7 +744,38 @@ mod tests {
             )
         }))
         .await;
-        assert!(results.iter().all(Result::is_ok), "every export committed");
+        let ok = results.iter().filter(|r| r.is_ok()).count();
+        let refused = results
+            .iter()
+            .filter(|r| r.as_ref().err() == Some(&"mail_export_in_flight"))
+            .count();
+        assert_eq!(ok, 1, "exactly one identical export commits");
+        assert_eq!(refused, 2, "the other two are refused as in flight");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1, "one output file");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    // Different messages on one account still run one at a time.
+    #[tokio::test]
+    async fn one_account_exports_one_message_at_a_time() {
+        let dir = scratch("per-account");
+        let limits = ExportLimits::new();
+        let control = ExportControl::new();
+        let adapter = Counting::new();
+        let results = futures_util::future::join_all((0..3).map(|n| {
+            let mut request = request();
+            request.id = format!("{}:INBOX", n + 1);
+            export_with(
+                request,
+                &adapter,
+                &dir,
+                &Value::Null,
+                &limits,
+                &control,
+            )
+        }))
+        .await;
+        assert!(results.iter().all(Result::is_ok), "three different messages commit");
         assert_eq!(adapter.peak.load(Ordering::SeqCst), 1);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -706,6 +855,102 @@ mod tests {
         cancel.cancel();
         assert_eq!(handle.await.unwrap(), Err("request_cancelled"));
         assert!(fs::read_dir(&dir).unwrap().next().is_none());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    // A queued second request for the same account must not hold a global
+    // permit, or a different account is starved behind it. The account permit
+    // is taken before the global one, so account b runs alongside account a.
+    #[tokio::test]
+    async fn a_queued_same_account_request_does_not_block_another_account() {
+        fn spawn_one(
+            dir: &Path,
+            limits: &Arc<ExportLimits>,
+            control: &ExportControl,
+            adapter: &Arc<Gated>,
+            request: ExportRequest,
+        ) -> tokio::task::JoinHandle<Result<Value, &'static str>> {
+            let dir = dir.to_path_buf();
+            let limits = limits.clone();
+            let control = control.clone();
+            let adapter = adapter.clone();
+            tokio::spawn(async move {
+                export_with(
+                    request,
+                    adapter.as_ref(),
+                    &dir,
+                    &Value::Null,
+                    limits.as_ref(),
+                    &control,
+                )
+                .await
+            })
+        }
+
+        let dir = scratch("fairness");
+        let limits = Arc::new(ExportLimits::new());
+        let control = ExportControl::new();
+        let a_started = Arc::new(Notify::new());
+        let b_started = Arc::new(Notify::new());
+        let gate = Arc::new(Semaphore::new(0));
+        let adapter = Arc::new(Gated {
+            a_started: a_started.clone(),
+            b_started: b_started.clone(),
+            gate: gate.clone(),
+        });
+
+        let a1 = spawn_one(
+            &dir,
+            &limits,
+            &control,
+            &adapter,
+            request_for("imap:a@example.test"),
+        );
+        a_started.notified().await;
+
+        let mut a2_request = request_for("imap:a@example.test");
+        a2_request.id = "2:INBOX".into();
+        let a2 = spawn_one(&dir, &limits, &control, &adapter, a2_request);
+        let b1 = spawn_one(
+            &dir,
+            &limits,
+            &control,
+            &adapter,
+            request_for("imap:b@example.test"),
+        );
+
+        let b_ran = tokio::time::timeout(Duration::from_millis(500), b_started.notified())
+            .await
+            .is_ok();
+        assert!(b_ran, "account b must run while account a is still exporting");
+
+        gate.add_permits(3);
+        assert!(a1.await.unwrap().is_ok());
+        assert!(a2.await.unwrap().is_ok());
+        assert!(b1.await.unwrap().is_ok());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    // A swap of the destination directory after it is anchored must not
+    // redirect the file: the handle still names the original directory.
+    #[cfg(unix)]
+    #[test]
+    fn a_parent_directory_swap_does_not_redirect_the_write() {
+        let dir = scratch("swap");
+        let target = dir.join("Downloads");
+        fs::create_dir_all(&target).unwrap();
+        let anchored = crate::platform::private_fs::directories(&target, &[], true)
+            .unwrap()
+            .unwrap();
+        let outside = dir.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let renamed = dir.join("Downloads-original");
+        fs::rename(&target, &renamed).unwrap();
+        std::os::unix::fs::symlink(&outside, &target).unwrap();
+        let _ = write_unique_in(&target, &anchored, "note.eml", b"payload").unwrap();
+        assert!(renamed.join("note.eml").exists(), "written to the anchored directory");
+        assert!(!outside.join("note.eml").exists(), "not redirected through the symlink");
+        assert_eq!(fs::read(renamed.join("note.eml")).unwrap(), b"payload");
         fs::remove_dir_all(dir).unwrap();
     }
 }
