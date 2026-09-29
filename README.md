@@ -1,4 +1,4 @@
-> **Private development copy for Chris Gray.** Start with [PRIVATE-FORK.md](PRIVATE-FORK.md) and the [execution plan](planning/PROJECT-PLAN.md). Spellchecking and `.eml` export are planned, not implemented. The upstream installation instructions below install upstream Omamail; use the private deployment plan only after final review.
+> **Public development copy maintained by Chris Gray.** Start with [project context](PRIVATE-FORK.md) and the [execution plan](planning/PROJECT-PLAN.md). Spellchecking and `.eml` export are planned, not implemented. The installation instructions below install upstream Omamail; this copy has no published release or supported installer yet.
 
 # Omamail
 

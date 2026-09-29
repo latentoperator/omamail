@@ -34,7 +34,7 @@ Chris is product owner. The supervising Codex agent is the final technical judge
 
 ## Evidence rules
 
-Every record names the candidate SHA, baseline SHA, runtime versions, command, exit status, fixture/scenario, observed result and limitation. Raw test logs and screenshots stay in ignored local artifacts or private attachments; summarize only synthetic/sanitized evidence in tracked Markdown. Never publish real account data to substantiate a test.
+Every record names the candidate SHA, baseline SHA, runtime versions, command, exit status, fixture/scenario, observed result and limitation. Raw test logs stay in ignored local artifacts; use only synthetic or sanitized screenshots in public PR attachments and tracked Markdown. Never publish real account data to substantiate a test.
 
 A failing test may be inherited. Prove it at the baseline under the same environment, record it as a failure, and assess whether the changed area depends on it. Only the supervisor may accept a demonstrated unrelated baseline limitation with written reasoning. A failure in the feature, its identity/storage boundary, or required visual path is a blocker. Do not weaken or remove a test to make CI green.
 

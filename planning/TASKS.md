@@ -8,7 +8,7 @@ Read [PROJECT-PLAN.md](PROJECT-PLAN.md) and the root [AGENTS.md](../AGENTS.md) f
 2. Read the packet's listed source plus the relevant root agreements. Find callers with `rg` before editing an interface. Inspect actual APIs; do not fabricate methods from documentation examples.
 3. Add behavioral tests and reproduce their failure on the prior behavior where meaningful. Implement the smallest complete change. Synthetic fixtures use reserved example domains and no live credentials.
 4. Run focused checks first. Run the required aggregate gates for the affected layer before handoff. Record exact commands and exit codes; retain failure output outside tracked source. Missing tools or skipped tests are NOT RUN.
-5. Commit only task changes with an outcome-oriented subject. Submit a private draft PR when assigned to do so. Include a handoff based on [the template](templates/HANDOFF.md), including candidate SHA and acceptance criterion IDs.
+5. Commit only task changes with an outcome-oriented subject. Submit a draft PR in this repository when assigned to do so. Use synthetic or redacted data in all public PR text and attachments. Include a handoff based on [the template](templates/HANDOFF.md), including candidate SHA and acceptance criterion IDs.
 6. Stop at READY FOR REVIEW. Only the supervisor can accept, integrate, or authorize the deployment task. Later changes invalidate earlier exact-commit acceptance.
 
 ## F00 — Establish reproducible development and baseline
@@ -25,7 +25,7 @@ Read [PROJECT-PLAN.md](PROJECT-PLAN.md) and the root [AGENTS.md](../AGENTS.md) f
 2. Build the unmodified baseline and establish an isolated test environment with temporary config/cache/data/state roots. Never repurpose shell `$HOME`; if an existing test harness isolates child-process HOME, retain its documented behavior. Ensure no credential reads or production account discovery occur.
 3. Run the baseline gates below. Preserve separate baseline artifacts and the exact source SHA. Investigate failures enough to distinguish missing dependencies from code failures; do not fix unrelated product defects in this packet.
 4. Prove a synthetic Qt/Quickshell composer can load with the native build without changing the installed plugin, accounts, timer, or active backend. Record launch/stop commands and verify isolation.
-5. Audit inherited workflows before enabling Actions. Keep Pages, release publication, and unsolicited comment automation disabled. Decide which read-only checks to enable, with bounded concurrency and no live credentials. Adapt the published-backend gate to the verified upstream release source; a private copy has no historical GitHub release assets even though it has Git history/tags.
+5. Audit inherited workflows before enabling Actions. Keep Pages, release publication, and unsolicited comment automation disabled. Decide which read-only checks to enable, with bounded concurrency and no live credentials. Adapt the published-backend gate to the verified upstream release source; this derivative has no historical GitHub release assets even though it has Git history/tags.
 6. Record actual remote protection capabilities. Request PR checks when supported by the account plan; if protection is unavailable, retain the supervisor workflow and state plainly that it is procedural. Never claim model-specific protection is enforced by GitHub.
 
 **Verification:** `cargo build --locked --bin omamail`; `make app-build`; `make validate`; `cargo clippy --locked --all-targets -- -D warnings`; `make test-backend-process`. Inspect these targets first because platform prerequisites matter. No live mail commands are needed.
@@ -196,7 +196,7 @@ Prepare exact backup and restore commands for plugin checkout/registration, bina
 
 Use [REVIEW-GATE.md](REVIEW-GATE.md) and [templates/JUDGE.md](templates/JUDGE.md). Obtain independent fresh-context review, inspect source and test evidence, reproduce decisive checks, and validate all required scenarios at the final candidate SHA. Output ACCEPT, REVISE, or BLOCKED with a separate security verdict. No worker self-approval or green-CI-only acceptance. Any code change after the reviewed SHA requires renewed review and affected tests.
 
-**Deliver:** an exact-commit judge record in the private PR or a later documentation commit that identifies the earlier tested candidate SHA. The evidence record does not need to contain its own eventual commit SHA. ACCEPT makes the candidate eligible for an explicitly assigned deployment task; it does not itself claim installation happened.
+**Deliver:** an exact-commit judge record in this repository's PR or a later documentation commit that identifies the earlier tested candidate SHA. The evidence record does not need to contain its own eventual commit SHA. ACCEPT makes the candidate eligible for an explicitly assigned deployment task; it does not itself claim installation happened.
 
 ## D01 — Install the accepted candidate on the laptop
 

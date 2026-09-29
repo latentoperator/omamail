@@ -1,8 +1,8 @@
-# Omamail private development copy
+# Omamail development copy
 
 Owner: Chris Gray. Supervising technical judge: the Codex agent directing this project. Created: 2026-09-29.
 
-This repository preserves the source history of [huacnlee/omamail](https://github.com/huacnlee/omamail) and its [MIT license](LICENSE). It is an independent private GitHub repository, rather than a GitHub-network fork: [public forks must remain public](https://docs.github.com/en/pull-requests/reference/forks). Upstream updates can still be fetched and merged through the `upstream` remote.
+This public repository preserves the source history of [huacnlee/omamail](https://github.com/huacnlee/omamail) and its [MIT license](LICENSE). It was created as an independent private development copy and later made public; it is not a GitHub-network fork. Upstream updates can still be fetched and merged through the `upstream` remote.
 
 ## Deliverables
 
@@ -28,7 +28,7 @@ This repository preserves the source history of [huacnlee/omamail](https://githu
 
 Development checkout: `/home/chrisgray/Projects/omamail`. The daily plugin remains a separate checkout under `~/.config/omarchy/plugins/omamail`. Edits in the daily plugin tree can hot-reload the desktop; do not develop there.
 
-`origin` is the private repository. `upstream` is the original public project, with its local push URL disabled. Use `git fetch upstream` to inspect updates; integrate them in a dedicated `maintenance/upstream-YYYY-MM-DD` branch and repeat the affected gates. Preserve the upstream history and license. Do not use a mirror push against an existing repository.
+`origin` is this public repository. `upstream` is the original public project, with its local push URL disabled. Use `git fetch upstream` to inspect updates; integrate them in a dedicated `maintenance/upstream-YYYY-MM-DD` branch and repeat the affected gates. Preserve the upstream history and license. Do not use a mirror push against an existing repository.
 
 Initial source baseline: `2a5a26cf5559dee78291fc5e34876fc5dfd39959`, upstream main, 2026-09-27. Installed plugin/backend: 0.10.7. The released backend speaks API 5; the checkout implements API 6. Having the same application version does not imply identical APIs or features.
 

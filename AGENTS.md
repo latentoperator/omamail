@@ -1,18 +1,18 @@
 # Repository working agreements
 
-## Private project instructions — read first
+## Project instructions — read first
 
-This private derivative is owned by Chris Gray. The current assignment is recorded in [planning/PROJECT-PLAN.md](planning/PROJECT-PLAN.md); start with [PRIVATE-FORK.md](PRIVATE-FORK.md). The user explicitly requested a versioned project plan in this repository, so `planning/` and its small text evidence records are an exception to the upstream rule excluding planning material. Retain the upstream MIT license and attribution.
+This public derivative is owned by Chris Gray. The current assignment is recorded in [planning/PROJECT-PLAN.md](planning/PROJECT-PLAN.md); start with [PRIVATE-FORK.md](PRIVATE-FORK.md). The user explicitly requested a versioned project plan in this repository, so `planning/` and its small text evidence records are an exception to the upstream rule excluding planning material. Retain the upstream MIT license and attribution.
 
 Implementers execute one assigned task from [planning/TASKS.md](planning/TASKS.md), in a task branch or separate worktree. Use [planning/WORKER-PROMPT.md](planning/WORKER-PROMPT.md) and provide [planning/templates/HANDOFF.md](planning/templates/HANDOFF.md) at the tested commit. Do not implement adjacent tasks without assignment. Do not silently change agreed contracts, omit tests, broaden provider support, or treat a missing dependency as a passed check.
 
 The supervising Codex agent from the project conversation is the final technical judge; a worker cannot approve its own work, merge its PR, publish a release, or install its candidate into Chris's daily desktop. An independent reviewer may recommend approval, but only the supervisor may record final acceptance under [planning/REVIEW-GATE.md](planning/REVIEW-GATE.md). Chris retains product authority. Approval is bound to an exact candidate commit and becomes stale after code changes. Documentation is a working agreement, not a claim of GitHub-enforced branch protection; actual remote controls are recorded in [planning/STATE.md](planning/STATE.md).
 
-This private repository uses its own PRs. Never push to `huacnlee/omamail` or open upstream issues/PRs as part of these tasks. Public submission is a separate decision. Do not run `make publish`, upstream installers, `make install`, or `scripts/link-plugin.sh` during feature development. Those can replace the daily runtime, restart the shell, or publish assets. Use the isolated setup defined by task F00; deployment belongs to D01 after supervisor acceptance.
+This public repository uses its own PRs. Never push to `huacnlee/omamail` or open upstream issues/PRs as part of these tasks. Upstream submission and release publication are separate decisions. Do not run `make publish`, upstream installers, `make install`, or `scripts/link-plugin.sh` during feature development. Those can replace the daily runtime, restart the shell, or publish assets. Use the isolated setup defined by task F00; deployment belongs to D01 after supervisor acceptance.
 
-Use synthetic messages and temporary application directories for testing. Never commit account registries, OAuth material, real mail, exported personal messages, cleanup logs, or screenshots containing live inboxes. A private repository is still not a credential store. Small generated synthetic `.eml` fixtures are allowed under a clearly identified test fixture directory, with no actual mailbox data.
+Use synthetic messages and temporary application directories for testing. Never commit account registries, OAuth material, real mail, exported personal messages, cleanup logs, or screenshots containing live inboxes. Small generated synthetic `.eml` fixtures are allowed under a clearly identified test fixture directory, with no actual mailbox data. Treat commits, PR text, attachments, and Actions logs as public.
 
-The upstream technical rules below remain in effect. Some historical architecture prose describes earlier implementations: confirm current source and the pinned baseline in the project plan before extending a module. Where these private project instructions expressly change workflow or planning storage, they take precedence over the corresponding inherited workflow.
+The upstream technical rules below remain in effect. Some historical architecture prose describes earlier implementations: confirm current source and the pinned baseline in the project plan before extending a module. Where these project instructions expressly change workflow or planning storage, they take precedence over the corresponding inherited workflow.
 
 ## Colors
 

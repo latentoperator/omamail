@@ -327,7 +327,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ARCH: ${{ matrix.arch }}
           SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
-          # This private derivative keeps upstream history and tags but has no
+          # This derivative keeps upstream history and tags but has no
           # release assets of its own, and publishing them is out of scope. The
           # pinned release the plugin uses is published by the upstream project,
           # so the released gate verifies that actual binary.
