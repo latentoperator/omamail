@@ -19,5 +19,4 @@ __pycache__/
 
 # Local development evidence stays out of public Git history unless sanitized.
 /artifacts/
-/planning/local/
 /.test-home/

@@ -1,18 +1,14 @@
 # Repository working agreements
 
-## Project instructions — read first
+## This repository
 
-This public derivative is owned by Chris Gray. The current assignment is recorded in [planning/PROJECT-PLAN.md](planning/PROJECT-PLAN.md); start with [PRIVATE-FORK.md](PRIVATE-FORK.md). The user explicitly requested a versioned project plan in this repository, so `planning/` and its small text evidence records are an exception to the upstream rule excluding planning material. Retain the upstream MIT license and attribution.
+This is a public development copy of [huacnlee/omamail](https://github.com/huacnlee/omamail), maintained by Chris Gray. It keeps the upstream history and the MIT [license](LICENSE); keep both intact.
 
-Implementers execute one assigned task from [planning/TASKS.md](planning/TASKS.md), in a task branch or separate worktree. Use [planning/WORKER-PROMPT.md](planning/WORKER-PROMPT.md) and provide [planning/templates/HANDOFF.md](planning/templates/HANDOFF.md) at the tested commit. Do not implement adjacent tasks without assignment. Do not silently change agreed contracts, omit tests, broaden provider support, or treat a missing dependency as a passed check.
+Work here uses this repository's own branches and pull requests. Do not push to `huacnlee/omamail` or open issues or pull requests there. The Release, Pages, and CI report workflows are disabled: do not run `make publish`. During development, do not run upstream installers, `make install`, or `scripts/link-plugin.sh`, which can replace the plugin running on the desktop or restart the shell.
 
-The supervising Codex agent from the project conversation is the final technical judge; a worker cannot approve its own work, merge its PR, publish a release, or install its candidate into Chris's daily desktop. An independent reviewer may recommend approval, but only the supervisor may record final acceptance under [planning/REVIEW-GATE.md](planning/REVIEW-GATE.md). Chris retains product authority. Approval is bound to an exact candidate commit and becomes stale after code changes. Documentation is a working agreement, not a claim of GitHub-enforced branch protection; actual remote controls are recorded in [planning/STATE.md](planning/STATE.md).
+Test with synthetic messages and temporary application directories. Never commit account registries, OAuth material, real mail, exported personal messages, or screenshots of live inboxes. Small synthetic `.eml` fixtures are allowed under a clearly identified test fixture directory. Treat commits, pull request text, attachments, and Actions logs as public.
 
-This public repository uses its own PRs. Never push to `huacnlee/omamail` or open upstream issues/PRs as part of these tasks. Upstream submission and release publication are separate decisions. Do not run `make publish`, upstream installers, `make install`, or `scripts/link-plugin.sh` during feature development. Those can replace the daily runtime, restart the shell, or publish assets. Use the isolated setup defined by task F00; deployment belongs to D01 after supervisor acceptance.
-
-Use synthetic messages and temporary application directories for testing. Never commit account registries, OAuth material, real mail, exported personal messages, cleanup logs, or screenshots containing live inboxes. Small generated synthetic `.eml` fixtures are allowed under a clearly identified test fixture directory, with no actual mailbox data. Treat commits, PR text, attachments, and Actions logs as public.
-
-The upstream technical rules below remain in effect. Some historical architecture prose describes earlier implementations: confirm current source and the pinned baseline in the project plan before extending a module. Where these project instructions expressly change workflow or planning storage, they take precedence over the corresponding inherited workflow.
+The upstream rules below apply unchanged. Some historical architecture prose describes earlier implementations; confirm the current source before extending a module.
 
 ## Colors
 
@@ -559,7 +555,7 @@ key. What matters while working:
 
 ## Releasing
 
-The release rules below describe inherited upstream machinery. This derivative's Release workflow is disabled; do not run `make publish` or publish this repository's assets during feature development. R00 must establish separate provenance and installation before any release decision.
+The release rules below describe inherited upstream machinery. This derivative's Release workflow is disabled; do not run `make publish` or publish this repository's assets during feature development.
 
 - `make publish VERSION=X.Y.Z` creates `release/X.Y.Z` and one PR from a clean, synchronized main; without VERSION it increments the patch. It prepares version metadata and pushes only the release branch. Never push main directly or bypass its PR requirement.
 - Release CI accepts only the matching versioned release branch. It builds both native backends, creates the tag, publishes and verifies public assets, then updates `backend-version` and folds `backend-api.json` on that same branch. Merge that PR once after the pin commit passes the required backend gate. Never update the QML backend pin before its release succeeds.
