@@ -1,6 +1,6 @@
 # Backend runtimes and releases
 
-This public development repository currently installs the pinned upstream backend and publishes no release assets. Its Pages, Release, and CI report workflows are disabled. The release procedure below documents inherited upstream machinery; do not run `make publish` for this derivative. A private candidate installation and rollback procedure remains a planned R00 task. Current repository settings are recorded in [planning/STATE.md](../planning/STATE.md).
+This public development repository currently installs the pinned upstream backend and publishes no release assets. Its Pages, Release, and CI report workflows are disabled. The release procedure below documents inherited upstream machinery; do not run `make publish` for this derivative. This repository's branch protection is described under [Release before pin](#release-before-pin).
 
 ## Omarchy plugin-owned backend
 
@@ -140,7 +140,7 @@ binary does not have yet. The contract names that difference and nothing more:
 
 ## Release before pin
 
-The procedure in this section describes the inherited upstream release flow. Release Actions are disabled in this derivative, and no public release or installer is planned for the current feature work. R00 must establish separate candidate provenance and installation before any release decision.
+The procedure in this section describes the inherited upstream release flow. Release Actions are disabled in this derivative, and no public release or installer is planned for the current feature work.
 
 Run `make publish VERSION=MAJOR.MINOR.PATCH` on a clean main synchronized with origin. Without `VERSION`, it prepares the next patch version. The command creates `release/X.Y.Z`, prepares Cargo.toml, the omamail Cargo.lock record and manifest.json, and opens one PR targeting main. It pushes only that release branch, then follows its exact Release run. It never pushes main or a tag. `backend-version` and the released API contract stay unchanged during preparation.
 
@@ -148,7 +148,7 @@ In the upstream repository, a push to `release/**` starts the authoritative Rele
 
 The required **Published backend merge gate** refuses a release PR until its pin equals the prepared version, then verifies the actual released binaries and contract as usual. Once the pin commit and required checks pass, review and merge that PR once: main receives the version metadata and working backend dependency together. The command does not merge automatically. Features wait until the connected backend meets their fixed minimum API revision, independently of whether that revision is currently labelled released or unreleased.
 
-This derivative's `main` branch protection requires the Published backend merge gate and prohibits deletion and force pushes. It does not require PR reviews; administrators can bypass the status check because `enforce_admins` is false. The project workflow still requires PRs and supervisor acceptance. Do not push directly to main or use the administrator bypass for routine changes.
+This derivative's `main` branch protection requires the Published backend merge gate and prohibits deletion and force pushes. It does not require PR reviews; administrators can bypass the status check because `enforce_admins` is false. Changes still go through pull requests. Do not push directly to main or use the administrator bypass for routine changes.
 
 The workflow tests and builds locked native musl binaries on Linux x86_64 and
 aarch64, executes each version probe, rejects dynamic ELF dependencies, and
