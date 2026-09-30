@@ -18,11 +18,7 @@ pub fn serve() -> io::Result<()> {
             // Observe output closure independently so cancellation drops that
             // queue and wakes its sender as well as all running requests.
             while !finished.load(Ordering::Acquire) {
-                let mut output = libc::pollfd {
-                    fd: libc::STDOUT_FILENO,
-                    events: 0,
-                    revents: 0,
-                };
+                let mut output = output_descriptor(libc::STDOUT_FILENO);
                 let ready = unsafe { libc::poll(&mut output, 1, 100) };
                 if output.revents != 0
                     || failed.load(Ordering::Acquire)
@@ -48,6 +44,19 @@ pub fn serve() -> io::Result<()> {
         finished.store(true, Ordering::Release);
         result
     })
+}
+
+#[cfg(unix)]
+fn output_descriptor(fd: libc::c_int) -> libc::pollfd {
+    // Darwin registers no kqueue filter for events=0. Requesting POLLHUP
+    // registers its read filter, which watches closure on a pipe's write end
+    // without waking for ordinary writable capacity. Linux also reports pipe
+    // errors with this mask. Never request POLLOUT: it would spin while idle.
+    libc::pollfd {
+        fd,
+        events: libc::POLLHUP,
+        revents: 0,
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -105,11 +114,7 @@ impl Read for Input {
                     events: libc::POLLIN,
                     revents: 0,
                 },
-                libc::pollfd {
-                    fd: libc::STDOUT_FILENO,
-                    events: 0,
-                    revents: 0,
-                },
+                output_descriptor(libc::STDOUT_FILENO),
             ];
             // The backend is the only stdin reader. Read the descriptor directly:
             // a buffered Stdin reader could contain bytes invisible to poll.
@@ -175,5 +180,33 @@ impl Write for Output {
             self.failed.store(true, Ordering::Release);
         }
         result
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    #[test]
+    fn output_observer_waits_until_the_pipe_reader_closes() {
+        let mut descriptors = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
+        // Own both descriptors immediately so assertions also close them.
+        let reader = unsafe { OwnedFd::from_raw_fd(descriptors[0]) };
+        let writer = unsafe { OwnedFd::from_raw_fd(descriptors[1]) };
+        let mut output = output_descriptor(writer.as_raw_fd());
+        assert_eq!(
+            unsafe { libc::poll(&mut output, 1, 20) },
+            0,
+            "a writable pipe must not wake an idle observer"
+        );
+        drop(reader);
+        assert_eq!(unsafe { libc::poll(&mut output, 1, 200) }, 1);
+        assert_ne!(
+            output.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL),
+            0,
+            "peer closure must wake the observer without writing a response"
+        );
     }
 }
