@@ -1,4 +1,4 @@
-> **Public development copy maintained by Chris Gray.** Start with [project context](PRIVATE-FORK.md) and the [execution plan](planning/PROJECT-PLAN.md). Spellchecking and `.eml` export are planned, not implemented. The installation instructions below install upstream Omamail; this copy has no published release or supported installer yet.
+> **Public development copy of [Omamail](https://github.com/huacnlee/omamail), maintained by Chris Gray.** It adds spellchecking in the message composer and saving a message as an `.eml` file; both are in open pull requests and not yet on `main`. The installation instructions below install upstream Omamail; this copy has no published release.
 
 # Omamail
 
