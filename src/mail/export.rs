@@ -1,8 +1,8 @@
 //! Save one message's original bytes as `.eml` in the user's Downloads folder.
 //!
-//! The bytes come from the provider operation E01 added (`imap.rawMessage`) and
-//! are written unchanged. The RPC contract is frozen in `planning/decisions/E00.md`;
-//! this module owns strict account resolution's consumer side, the filename
+//! The bytes come from the provider's raw-message operation (`imap.rawMessage`)
+//! and are written unchanged. The `mail.exportEml` RPC contract is fixed; this
+//! module owns strict account resolution's consumer side, the filename
 //! policy, the bounded write, and the result shape.
 use super::{Account, ExportRequest, Provider};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -20,11 +20,11 @@ use std::{
 };
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
-/// The product limit from E00: below the transport's 32 MiB response bound and
+/// The product size limit: below the transport's 32 MiB response bound and
 /// above the 20 MiB attachment limit. Checked before any unbounded allocation.
 pub(crate) const MAX_BYTES: usize = 25 * 1024 * 1024;
 
-/// The operation deadline E00 froze. It is enforced inside the export, under
+/// The fixed operation deadline. It is enforced inside the export, under
 /// the client's 30 s bridge deadline, and never leaves a partial file.
 pub(crate) const EXPORT_DEADLINE: Duration = Duration::from_secs(25);
 
@@ -157,7 +157,7 @@ impl Cancellation {
     }
 }
 
-/// The per-request controls E00 froze. The token names the provider fetch in
+/// The fixed per-request controls. The token names the provider fetch in
 /// the IMAP cancel registry; the signal lets the export stop it before commit.
 /// Cloning shares both, so the drop guard can cancel a request it did not make.
 #[derive(Clone)]

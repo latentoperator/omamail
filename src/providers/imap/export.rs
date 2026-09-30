@@ -3,7 +3,7 @@
 //!
 //! Internal to the provider layer and deliberately absent from the advertised
 //! public method inventory (`src/backend/methods.rs`), like the internal
-//! `jmap.action*` planners. `mail.exportEml` (E02) consumes it.
+//! `jmap.action*` planners. `mail.exportEml` consumes it.
 use super::*;
 
 /// Validate the export parameters before any socket is opened.

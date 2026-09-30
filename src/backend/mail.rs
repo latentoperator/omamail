@@ -7,7 +7,7 @@ use std::{future::Future, pin::Pin};
 #[path = "mail_action_tests.rs"]
 mod action_tests;
 
-/// Supplies E01's raw retrieval to the export service. Credentials are resolved
+/// Supplies the IMAP raw-message retrieval to the export service. Credentials are resolved
 /// by the IMAP layer from the account id, as every other provider call does, so
 /// no secret passes through the export path.
 struct ProviderExport;

@@ -520,7 +520,7 @@ fn outlook_settings_ignore_persisted_credential_destination_and_identity() {
     assert_eq!(settings["insecure"], false);
 }
 
-// ---------------------------------------------------------------- E01 export
+// ------------------------------------------------------------ raw export
 fn export_params(port: u16, uid: u64) -> Value {
     json!({
         "settings": {"imapHost":"127.0.0.1","imapPort":port,"username":"synthetic","insecure":true,"testPlaintext":true},
