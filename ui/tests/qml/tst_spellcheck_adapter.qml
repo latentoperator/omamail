@@ -1,7 +1,7 @@
 import QtQuick
 import QtTest
 
-// S01: the optional spelling adapter's contract (planning/decisions/S00.md §3).
+// The optional spelling adapter's contract.
 // The adapter is loaded through a Loader so this file has no mandatory
 // org.kde.sonnet import and skips where Sonnet or en_US is unavailable.
 Item {

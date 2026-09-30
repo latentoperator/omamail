@@ -2,12 +2,12 @@ import QtQuick
 import org.kde.sonnet as Sonnet
 import "SpellingSession.js" as Session
 
-// Optional spelling adapter (S01). This is the only production file that
+// Optional spelling adapter. This is the only production file that
 // imports org.kde.sonnet, so it is always created through a Loader: a machine
 // without the module gets a load error and an editor that still works, rather
 // than a composer that refuses to open.
 //
-// The interface is frozen by planning/decisions/S00.md, with one later change:
+// The interface is fixed, with one later change:
 // the underline is drawn by the caller, not by Sonnet. Sonnet's QML highlighter
 // paints the misspelled word red as well as underlining it (its errorFormat
 // sets a red foreground; misspelledColor is inert), unlike the QWidget one,
@@ -23,12 +23,12 @@ Item {
   // this.
   property var document: null
   // `enabled` is reused from Item rather than redeclared: the adapter is
-  // non-visual, so this keeps the name frozen by S00 without shadowing
+  // non-visual, so this keeps the fixed interface name without shadowing
   // QQuickItem.enabled (which qmllint rejects). The owning Loader is inactive
   // when spelling is off, so this is a runtime toggle within a loaded adapter.
   property string language: "en_US"
-  // App-owned words to treat as correct (S00 §4). Persistence belongs to the
-  // settings layer (S04); this property only applies them.
+  // App-owned words to treat as correct. Persistence belongs to the
+  // settings layer in Service.qml; this property only applies them.
   property var personalWords: []
 
   // Availability is about the *requested* language, and it is computed after
@@ -81,7 +81,7 @@ Item {
     return true
   }
 
-  // Session-only ignore (S00 §4): never written to the user's dictionary.
+  // Session-only ignore: never written to the user's dictionary.
   function ignoreForSession(word) {
     if (!available || !word) return
     highlighter.ignoreWord(String(word))

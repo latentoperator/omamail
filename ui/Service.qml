@@ -650,7 +650,7 @@ Item {
   readonly property string spellingStatus: spellingProbe.status === Loader.Error
     ? "no-module" : (spellingProbe.item ? spellingProbe.item.status : "loading")
 
-  // App-owned personal words (S00 §4, S6): persisted beside the other window
+  // App-owned personal words: persisted beside the other window
   // state, applied by the composer, never written to a global dictionary.
   //
   // The write is a queue rather than a one-shot. A second word added while the
@@ -2728,7 +2728,7 @@ Item {
     onLoadFailed: root.applyWindowPrefs("")
   }
 
-  // Spelling's personal dictionary is app-owned (S00 §4): persisted beside the
+  // Spelling's personal dictionary is app-owned: persisted beside the
   // window state, never written to a global dictionary.
   FileView {
     id: spellingWordsFile

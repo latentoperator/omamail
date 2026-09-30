@@ -1,12 +1,12 @@
 import QtQuick
 import org.kde.sonnet as Sonnet
 
-// S00 probe component: the only file under tests/ that imports org.kde.sonnet.
+// Probe component: the only file under tests/ that imports org.kde.sonnet.
 // It is loaded through a Loader so a machine without the module reports a
 // loader error to the probe instead of failing the whole test file to import.
 //
 // The adapter the real feature will use is provisional; this exists to prove
-// the runtime behaviour the adapter must rely on. See planning/decisions/S00.md.
+// the runtime behaviour the adapter must rely on.
 Item {
   id: probe
 

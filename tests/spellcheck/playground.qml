@@ -3,15 +3,15 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import org.kde.sonnet as Sonnet
 
-// S00 interactive playground — a throwaway tool for trying the spelling
-// adapter contract by hand before S01 wires it into the composer.
+// Interactive playground — a throwaway tool for trying the spelling adapter
+// contract by hand, outside the composer.
 //
 // Run it on the desktop (not offscreen):
 //   /usr/lib/qt6/bin/qml tests/spellcheck/playground.qml
 //
 // Type in the body: misspelled words get Qt's red underline. Put the caret in
 // a word to see Sonnet's suggestions; click one to correct it. The correction
-// uses the frozen rule from planning/decisions/S00.md §2.1 — prime with
+// uses the adapter's correction rule — prime with
 // suggestions(position, 0) immediately before replaceWord(word, position) —
 // because without the prime Sonnet inserts instead of replacing.
 ApplicationWindow {
@@ -19,7 +19,7 @@ ApplicationWindow {
   width: 860
   height: 560
   visible: true
-  title: "Omamail spelling playground — S00"
+  title: "Omamail spelling playground"
 
   property var suggestions: []
   property string inspectedWord: ""

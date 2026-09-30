@@ -1,10 +1,10 @@
 import QtQuick
 import QtTest
 
-// S00 probe: proves the real Sonnet QML highlighter behaviour the spelling
+// Probe: proves the real Sonnet QML highlighter behaviour the spelling
 // adapter depends on. It loads Sonnet through a Loader so this file has no
 // mandatory org.kde.sonnet import, and skips (rather than fails) where Sonnet
-// or the en_US dictionary is absent. See planning/decisions/S00.md.
+// or the en_US dictionary is absent.
 Item {
   id: root
   width: 800

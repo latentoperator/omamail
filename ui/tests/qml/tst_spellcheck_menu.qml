@@ -2,7 +2,7 @@ import QtQuick
 import QtTest
 import "../../components" as Omamail
 
-// S02: the right-click / Ctrl+. spelling menu on the composer body — the word
+// The right-click / Ctrl+. spelling menu on the composer body — the word
 // it targets, the correction/ignore/dictionary actions it offers, and the
 // guards that keep a stale or destroyed draft from being rewritten. The
 // underlines and the adapter contract are covered by tst_spellcheck_adapter

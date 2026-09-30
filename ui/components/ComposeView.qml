@@ -38,7 +38,7 @@ DropArea {
   property bool opened: false
   property bool userModified: false
   property bool settingBodyText: false
-  // Spelling settings (S04): read from the service, applied to the adapter.
+  // Spelling settings: read from the service, applied to the adapter.
   // The service owns the values and persistence; the composer only applies
   // them. Missing support is reported via spellingStatus.
   // The spelling settings live on the service; the composer follows them when
@@ -73,7 +73,7 @@ DropArea {
       + ":" + bodyEdit.font.family
   // The theme's error role, drawn under misspelled words. The composer draws
   // the underline itself because Sonnet's QML highlighter also colours the word
-  // red; see planning/decisions/S00.md and the S01 handoff.
+  // red; see ui/compose/SpellcheckAdapter.qml.
   property color errorColor: textColor
 
   // A word is marked only once it is finished (something follows it), so this
@@ -137,8 +137,8 @@ DropArea {
     return true
   }
 
-  // App-owned personal words (S00 §4): owned and persisted by the service
-  // (S04); applied to the adapter and rechecked whenever the list changes.
+  // App-owned personal words: owned and persisted by the service;
+  // applied to the adapter and rechecked whenever the list changes.
   onSpellingPersonalWordsChanged: {
     if (spellcheckLoader.item) spellcheckLoader.item.personalWords = spellingPersonalWords
     refreshSpellingRanges()

@@ -1,7 +1,7 @@
 import QtQuick
 import "../../ui/components" as Omamail
 
-// S01 preview: the real ComposeView with the optional spelling adapter, for
+// Preview: the real ComposeView with the optional spelling adapter, for
 // hands-on tuning of the underline and the suggestion menu.
 //
 //   right-click a misspelled word  -> suggestions, Ignore, Add to dictionary

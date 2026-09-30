@@ -2,9 +2,9 @@ import QtQuick
 import QtTest
 import "../../components" as Omamail
 
-// S01: the real composer attaches the optional spelling adapter to its body
+// The real composer attaches the optional spelling adapter to its body
 // document, does not change the draft while checking, and unloads cleanly when
-// disabled. Underlines are proven by the adapter contract test and the S00
+// disabled. Underlines are proven by the adapter contract test and the Sonnet
 // probe; here the point is the wiring, not the highlighter.
 Item {
   width: 900
