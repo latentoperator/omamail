@@ -9,15 +9,45 @@ pub fn serve() -> io::Result<()> {
     #[cfg(target_os = "linux")]
     bind_to_parent()?;
     let failed = Arc::new(AtomicBool::new(false));
-    super::protocol::serve(
-        BufReader::new(Input {
-            failed: failed.clone(),
-        }),
-        Output {
-            inner: io::stdout(),
-            failed,
-        },
-    )
+    let cancellation = Arc::new(super::protocol::Cancellation::default());
+    let finished = AtomicBool::new(false);
+    std::thread::scope(|_scope| {
+        #[cfg(unix)]
+        _scope.spawn(|| {
+            // The input thread can be blocked submitting to a full queue.
+            // Observe output closure independently so cancellation drops that
+            // queue and wakes its sender as well as all running requests.
+            while !finished.load(Ordering::Acquire) {
+                let mut output = libc::pollfd {
+                    fd: libc::STDOUT_FILENO,
+                    events: 0,
+                    revents: 0,
+                };
+                let ready = unsafe { libc::poll(&mut output, 1, 100) };
+                if output.revents != 0
+                    || failed.load(Ordering::Acquire)
+                    || (ready < 0
+                        && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted)
+                {
+                    failed.store(true, Ordering::Release);
+                    cancellation.cancel();
+                    break;
+                }
+            }
+        });
+        let result = super::protocol::serve_with_cancel(
+            BufReader::new(Input {
+                failed: failed.clone(),
+            }),
+            Output {
+                inner: io::stdout(),
+                failed: failed.clone(),
+            },
+            cancellation.clone(),
+        );
+        finished.store(true, Ordering::Release);
+        result
+    })
 }
 
 #[cfg(target_os = "linux")]

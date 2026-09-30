@@ -37,7 +37,11 @@ pub(super) async fn call(p: &Value) -> Result<Value> {
 pub(super) async fn raw_message(p: &Value, uid: u32, folder: &str) -> Result<Vec<u8>> {
     let (mut w, key) = acquire(p).await?;
     let result = fetch_literal(&mut w, uid, folder).await;
-    release(w, key).await;
+    // A framing refusal can leave unread literal bytes on the socket. Only
+    // a successful fetch is known to be synchronized and safe to reuse.
+    if result.is_ok() {
+        release(w, key).await;
+    }
     match result {
         Err("mail_response_too_large") => Err("mail_export_too_large"),
         other => other,

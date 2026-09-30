@@ -572,7 +572,10 @@ async fn raw_message_returns_exact_octets_and_only_peeks() {
         .await
         .unwrap();
     let bytes = STANDARD.decode(result["data"].as_str().unwrap()).unwrap();
-    assert_eq!(bytes, expected, "the literal must be returned byte for byte");
+    assert_eq!(
+        bytes, expected,
+        "the literal must be returned byte for byte"
+    );
     assert_eq!(result["bytes"], expected.len());
     server_task.await.unwrap();
 }
@@ -677,6 +680,69 @@ async fn raw_message_refuses_an_over_limit_literal_before_reading_it() {
     assert_eq!(
         call("imap.rawMessage", &export_params(port, 1)).await,
         Err("mail_export_too_large")
+    );
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn raw_message_reconnects_after_rejecting_an_unread_literal() {
+    let (listener, port) = server().await;
+    let server_task = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut first: Wire = BufReader::new(Box::new(socket));
+        login_and_examine(&mut first).await;
+        assert!(
+            line(&mut first)
+                .await
+                .unwrap()
+                .starts_with(b"O1 UID FETCH 1 ")
+        );
+        let announced = crate::mail::export::MAX_BYTES + 1;
+        write(
+            &mut first,
+            format!("* 1 FETCH (UID 1 BODY[] {{{announced}}}\r\n").as_bytes(),
+        )
+        .await
+        .unwrap();
+        let mut byte = [0u8; 1];
+        let read = tokio::time::timeout(Duration::from_secs(2), first.read(&mut byte))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            read, 0,
+            "an unread literal must close the connection before another command"
+        );
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut second: Wire = BufReader::new(Box::new(socket));
+        login_and_examine(&mut second).await;
+        assert!(
+            line(&mut second)
+                .await
+                .unwrap()
+                .starts_with(b"O1 UID FETCH 2 ")
+        );
+        write(
+            &mut second,
+            b"* 2 FETCH (UID 2 BODY[] {4}\r\nTRUE)\r\nO1 OK fetched\r\n",
+        )
+        .await
+        .unwrap();
+    });
+    assert_eq!(
+        call("imap.rawMessage", &export_params(port, 1)).await,
+        Err("mail_export_too_large")
+    );
+    let next = tokio::time::timeout(
+        Duration::from_secs(3),
+        call("imap.rawMessage", &export_params(port, 2)),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        STANDARD.decode(next["data"].as_str().unwrap()).unwrap(),
+        b"TRUE"
     );
     server_task.await.unwrap();
 }

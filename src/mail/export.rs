@@ -254,7 +254,8 @@ pub(crate) async fn export_with(
     // Reject a malformed `<uid>:<folder>` before any credential or network
     // work, and derive the canonical identity for admission. Leading zeros on
     // the UID (e.g. "01:INBOX") must not make the same message look distinct.
-    let (uid, folder) = crate::providers::imap::message_id(&request.id)?;
+    let (uid, folder) = crate::providers::imap::message_id(&request.id)
+        .map_err(|_| "mail_export_message_invalid")?;
     let canonical_id = format!("{uid}:{folder}");
 
     // A repeated (account, message) request is refused, not queued behind the
@@ -717,6 +718,20 @@ mod tests {
         let saved = PathBuf::from(result["path"].as_str().unwrap());
         assert_eq!(saved.parent().unwrap(), dir);
         assert_eq!(fs::read(&saved).unwrap(), bytes);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn malformed_message_ids_use_the_export_refusal() {
+        let dir = scratch("invalid-id");
+        for id in ["", "INBOX", "0:INBOX", "4294967296:INBOX", "1:", "1:IN\nBOX"] {
+            let mut request = request();
+            request.id = id.into();
+            assert_eq!(export_with(request, &Fake { payload: json!({}) }, &dir,
+                &Value::Null, &ExportLimits::new(), &ExportControl::new()).await,
+                Err("mail_export_message_invalid"));
+        }
+        assert!(fs::read_dir(&dir).unwrap().next().is_none());
         fs::remove_dir_all(dir).unwrap();
     }
 
