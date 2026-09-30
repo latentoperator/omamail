@@ -737,6 +737,8 @@ Column {
 
       // Availability is a runtime fact, separate from the enabled request:
       // a machine without Sonnet or the en_US dictionary still composes.
+      // Sonnet lists installed dictionaries once per process, so a dictionary
+      // installed while Omamail runs is only found after a restart.
       Text {
         objectName: "spellingNeedsSetup"
         width: parent.width
@@ -745,7 +747,7 @@ Column {
           ? "Spell-checking is unavailable: the Sonnet QML module is not installed."
           : "The " + (root.service ? root.service.spellingLanguage : "en_US")
             + " dictionary is not installed. Install the matching Hunspell "
-            + "dictionary package (for example hunspell-en_us) and reopen settings."
+            + "dictionary package (for example hunspell-en_us), then restart Omamail."
         color: root.accentColor
         font.family: root.panelFontFamily
         font.pixelSize: Style.font.caption
