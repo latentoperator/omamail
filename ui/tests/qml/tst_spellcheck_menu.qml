@@ -74,7 +74,7 @@ Item {
     function init() {
       compose.parent.forceActiveFocus()
       compose.begin("new", null, "", [])
-      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
       if (!compose.spellingAvailable) skip("spelling unavailable (" + compose.spellingStatus + ")")
     }
 

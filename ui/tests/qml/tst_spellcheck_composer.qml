@@ -78,7 +78,7 @@ Item {
     function test_body_adapter_attaches_and_checking_does_not_mutate() {
       var body = named(compose, "compose-body-editor")
       verify(body, "the composer owns a body editor")
-      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
       if (!compose.spellingAvailable) {
         skip("spelling unavailable (" + compose.spellingStatus + ")")
         return
@@ -94,7 +94,8 @@ Item {
 
     function test_session_ignore_refreshes_a_separate_composer_document() {
       var body = named(compose, "compose-body-editor")
-      tryVerify(function() { return compose.spellingAvailable }, 3000)
+      tryVerify(function() { return compose.spellingAvailable || compose.spellingStatus === "no-module" }, 3000)
+      if (!compose.spellingAvailable) { skip("spelling unavailable (" + compose.spellingStatus + ")"); return }
       body.text = "the zqxjremotereviewhere here "
       tryCompare(compose, "spellingRanges", [{ start: 4, end: 24 }])
       var component = Qt.createComponent("../../compose/SpellcheckAdapter.qml")
@@ -114,7 +115,8 @@ Item {
 
     function test_personal_words_preserve_focused_draft_selection_and_undo() {
       var body = named(compose, "compose-body-editor")
-      tryVerify(function() { return compose.spellingAvailable }, 3000)
+      tryVerify(function() { return compose.spellingAvailable || compose.spellingStatus === "no-module" }, 3000)
+      if (!compose.spellingAvailable) { skip("spelling unavailable (" + compose.spellingStatus + ")"); return }
       body.text = "the zqxjpersonalreviewhere here "
       body.forceActiveFocus()
       body.select(4, 9)
@@ -138,7 +140,7 @@ Item {
     function test_a_correction_changes_the_body_and_undo_restores_it() {
       var body = named(compose, "compose-body-editor")
       verify(body)
-      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
       if (!compose.spellingAvailable) { skip("spelling unavailable"); return }
       body.text = "a mispelled wrod here"
       var before = body.text
@@ -153,7 +155,7 @@ Item {
     function test_underline_ranges_require_a_finished_word() {
       var body = named(compose, "compose-body-editor")
       verify(body)
-      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
       if (!compose.spellingAvailable) { skip("spelling unavailable"); return }
       body.text = "a wrod"
       wait(250) // past the debounce
@@ -167,7 +169,7 @@ Item {
 
     function test_right_click_offers_suggestions_for_the_clicked_word() {
       var body = named(compose, "compose-body-editor")
-      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
       if (!compose.spellingAvailable) { skip("spelling unavailable"); return }
       body.text = "a mispelled wrod "
       wait(250)
@@ -187,7 +189,7 @@ Item {
 
     function test_ignore_for_session_stops_marking_the_word() {
       var body = named(compose, "compose-body-editor")
-      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
       if (!compose.spellingAvailable) { skip("spelling unavailable"); return }
       body.text = "the floobert here "
       wait(250)
@@ -204,7 +206,7 @@ Item {
 
     function test_add_to_dictionary_stops_marking_the_word() {
       var body = named(compose, "compose-body-editor")
-      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
       if (!compose.spellingAvailable) { skip("spelling unavailable"); return }
       body.text = "the blorptar here "
       wait(250)
@@ -221,7 +223,7 @@ Item {
 
     function test_ctrl_period_opens_suggestions_at_the_caret_word() {
       var body = named(compose, "compose-body-editor")
-      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
       if (!compose.spellingAvailable) { skip("spelling unavailable"); return }
       body.text = "the mispelled here "
       wait(250)
@@ -239,7 +241,7 @@ Item {
     // is about the requested dictionary: a missing one reads no-dictionary and
     // switching back recovers, with no silent fallback to English.
     function test_language_follows_the_setting_and_reports_a_missing_dictionary() {
-      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
       if (compose.spellingStatus === "no-module") { skip("Sonnet is not installed"); return }
       compose.spellingLanguage = "en_US"
       tryVerify(function() { return compose.spellingStatus === "ready" }, 3000)
@@ -257,7 +259,7 @@ Item {
     function test_underline_follows_the_editor_when_it_resizes() {
       var body = named(compose, "compose-body-editor")
       verify(body)
-      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
       if (!compose.spellingAvailable) { skip("spelling unavailable (" + compose.spellingStatus + ")"); return }
       body.text = "hello hello hello hello hello hello hello hello hello hello hello hello wrod here "
       wait(250)
@@ -277,12 +279,13 @@ Item {
     }
 
     function test_disabling_unloads_the_adapter_and_re_enabling_restores_it() {
-      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
+      if (compose.spellingStatus === "no-module") { skip("Sonnet is not installed"); return }
       compose.spellingEnabled = false
       tryVerify(function() { return compose.spellingAdapter === null }, 3000)
       compare(compose.spellingStatus, "disabled")
       compose.spellingEnabled = true
-      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
       compare(compose.spellingAvailable, true)
     }
 
@@ -291,7 +294,7 @@ Item {
     // the old dictionary's underlines from lingering.
     function test_a_valid_to_valid_language_switch_rechecks_ranges() {
       var body = named(compose, "compose-body-editor")
-      tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
       if (compose.spellingStatus === "no-module") { skip("Sonnet is not installed"); return }
 
       compose.spellingLanguage = "en_GB"
