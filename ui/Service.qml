@@ -7,6 +7,7 @@ import "calendar"
 import "agent"
 import "backend"
 import "diagnostics"
+import "compose" as Compose
 import "agent/Agent.js" as Agent
 
 import "account/Accounts.js" as Accounts
@@ -650,88 +651,14 @@ Item {
   readonly property string spellingStatus: spellingProbe.status === Loader.Error
     ? "no-module" : (spellingProbe.item ? spellingProbe.item.status : "loading")
 
-  // App-owned personal words: persisted beside the other window
-  // state, applied by the composer, never written to a global dictionary.
-  //
-  // The write is a queue rather than a one-shot. A second word added while the
-  // first write is still in flight must reach disk too, and an add that lands
-  // before the initial file read finishes must survive the read.
-  property var spellingPersonalWords: []
-  property bool spellingPersonalWordsLoaded: false
-  property bool spellingPersonalWordsWriting: false
-  property bool spellingPersonalWordsPending: false
-  property string spellingPersonalWordsError: ""
-
-  function normalizeSpellingPersonalWords(raw) {
-    var parsed = null
-    try { parsed = JSON.parse(String(raw || "")) } catch (e) { parsed = null }
-    var words = (parsed && Array.isArray(parsed.words)) ? parsed.words : []
-    var next = []
-    for (var i = 0; i < words.length; i++) {
-      var word = words[i]
-      if (typeof word !== "string") continue
-      if (word !== "" && next.indexOf(word) < 0) next.push(word)
-    }
-    return next
-  }
-
-  // Replace the list. The FileView load path uses `mergeSpellingPersonalWords`
-  // below; this is the explicit/reset form and what the tests drive.
-  function applySpellingPersonalWords(raw) {
-    spellingPersonalWords = normalizeSpellingPersonalWords(raw)
-    spellingPersonalWordsLoaded = true
-    if (spellingPersonalWordsPending) saveSpellingPersonalWords()
-  }
-
-  // A load that arrives after the user has already added a word must union,
-  // not replace: the in-memory additions are this session's intent and the
-  // disk copy is yesterday's.
-  function mergeSpellingPersonalWords(raw) {
-    var onDisk = normalizeSpellingPersonalWords(raw)
-    var next = spellingPersonalWords.slice()
-    for (var i = 0; i < onDisk.length; i++) {
-      if (next.indexOf(onDisk[i]) < 0) next.push(onDisk[i])
-    }
-    spellingPersonalWords = next
-    spellingPersonalWordsLoaded = true
-    if (spellingPersonalWordsPending) saveSpellingPersonalWords()
-  }
-
-  function saveSpellingPersonalWords() {
-    // Before the load completes, remember that there is something to write so
-    // the load can flush it rather than dropping it.
-    if (!spellingPersonalWordsLoaded) { spellingPersonalWordsPending = true; return }
-    if (spellingPersonalWordsWriting) { spellingPersonalWordsPending = true; return }
-    spellingPersonalWordsWriting = true
-    spellingPersonalWordsPending = false
-    writeConfig("spelling.json", JSON.stringify({ words: spellingPersonalWords }), function(ok, error) {
-      root.spellingPersonalWordsWriting = false
-      // The write boundaries can refuse the file (a host allowlist that has
-      // not been told about it, a full disk): keep the failure where the
-      // Settings page can say so instead of pretending the word saved.
-      root.spellingPersonalWordsError = ok ? "" : String(error || "Could not save personal words")
-      if (root.spellingPersonalWordsPending) root.saveSpellingPersonalWords()
-    })
-  }
-
-  function addPersonalWord(word) {
-    var value = String(word || "")
-    if (value === "" || spellingPersonalWords.indexOf(value) >= 0) return
-    var next = spellingPersonalWords.slice()
-    next.push(value)
-    spellingPersonalWords = next
-    saveSpellingPersonalWords()
-  }
-
-  function removePersonalWord(word) {
-    var value = String(word || "")
-    var at = spellingPersonalWords.indexOf(value)
-    if (at < 0) return
-    var next = spellingPersonalWords.slice()
-    next.splice(at, 1)
-    spellingPersonalWords = next
-    saveSpellingPersonalWords()
-  }
+  // App-owned personal words: compose/PersonalWords.qml stores them in
+  // spelling.json; the composer applies them.
+  Compose.PersonalWords { id: personalWords; service: root }
+  readonly property var spellingWordStore: personalWords
+  readonly property var spellingPersonalWords: personalWords.words
+  readonly property string spellingPersonalWordsError: personalWords.error
+  function addPersonalWord(word) { personalWords.add(word) }
+  function removePersonalWord(word) { personalWords.remove(word) }
 
   // ---------------------------------------------------------- the accounts
 
@@ -2726,18 +2653,6 @@ Item {
     onLoaded: root.applyWindowPrefs(text())
     // No file yet is the ordinary first-run state, not an error.
     onLoadFailed: root.applyWindowPrefs("")
-  }
-
-  // Spelling's personal dictionary is app-owned: persisted beside the
-  // window state, never written to a global dictionary.
-  FileView {
-    id: spellingWordsFile
-    path: root.configPath("spelling.json")
-    printErrors: false
-    // Merge rather than replace: a word added before the read returned is this
-    // session's and must not be undone by yesterday's file.
-    onLoaded: root.mergeSpellingPersonalWords(text())
-    onLoadFailed: root.mergeSpellingPersonalWords("")
   }
 
   // Availability probe: loads Sonnet once so the settings page can explain a
