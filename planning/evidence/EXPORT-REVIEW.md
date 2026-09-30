@@ -68,3 +68,26 @@ private runtime provenance/rollback, and final acceptance matrix are unfinished
 (I00, R00, J00). This records completion of the defect-review follow-up, not
 permission to merge, release, or replace the daily runtime. Screenshots remain
 synthetic UI previews and do not establish real-account integration.
+
+## macOS pipe-observer correction
+
+The macOS standalone-app job at `7c87b4c` failed the new full-queue stdio test:
+all 32 requests reached the synthetic peer, but closing stdout did not wake
+submission within three seconds. The other 13 checks passed. This was a new
+portability defect, not an inherited failure or a reason to relax the test.
+
+Source fix: `cc95b2d6b0d10010e97e13ba1779ec1030b0b0a4`. Both output poll sites
+now use one descriptor helper with an explicit `POLLHUP` event request. Apple’s
+[poll implementation](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/sys_generic.c)
+registers no filter for an empty event mask. Its
+[pipe implementation](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/sys_pipe.c)
+uses a closure-only read filter on a write-only pipe; the explicit hangup mask
+selects that filter without requesting ordinary writable readiness.
+
+A real-pipe regression requires no event while the reader is open and an error
+or hangup event after it closes, without writing a response. Local focused
+checks passed: pipe observer 1/1 and stdio 4/4. An independent source review
+verified the mask/filter reasoning, both call sites, the regression, and source
+hashes. Native macOS CI must verify the corrected platform path; its result is
+recorded on the exact PR candidate. The earlier Linux security verdict and
+unfinished release-acceptance work retain their stated scope.
