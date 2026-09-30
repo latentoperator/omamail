@@ -92,6 +92,49 @@ Item {
       compare(body.text, before)
     }
 
+    function test_session_ignore_refreshes_a_separate_composer_document() {
+      var body = named(compose, "compose-body-editor")
+      tryVerify(function() { return compose.spellingAvailable }, 3000)
+      body.text = "the zqxjremotereviewhere here "
+      tryCompare(compose, "spellingRanges", [{ start: 4, end: 24 }])
+      var component = Qt.createComponent("../../compose/SpellcheckAdapter.qml")
+      compare(component.status, Component.Ready)
+      var secondDoc = Qt.createQmlObject('import QtQuick; TextEdit { text: "zqxjremotereviewhere " }', compose)
+      var second = component.createObject(compose, { document: secondDoc.textDocument })
+      try {
+        verify(second.available)
+        second.ignoreForSession("zqxjremotereviewhere")
+        tryVerify(function() { return compose.spellingRanges.length === 0 })
+        compare(compose.spellingAdapter.inspect(6).misspelled, false)
+      } finally {
+        second.destroy()
+        secondDoc.destroy()
+      }
+    }
+
+    function test_personal_words_preserve_focused_draft_selection_and_undo() {
+      var body = named(compose, "compose-body-editor")
+      tryVerify(function() { return compose.spellingAvailable }, 3000)
+      body.text = "the zqxjpersonalreviewhere here "
+      body.forceActiveFocus()
+      body.select(4, 9)
+      compose.userModified = false
+      compose.bodyWasEdited = false
+      var before = body.text
+      var selected = body.selectedText
+      var revision = compose.bodyRevision
+      var undoAvailable = body.canUndo
+      mailService.addPersonalWord("zqxjpersonalreviewhere")
+      wait(250)
+      compare(body.text, before)
+      compare(body.selectedText, selected)
+      compare(body.canUndo, undoAvailable)
+      compare(compose.userModified, false)
+      compare(compose.bodyWasEdited, false)
+      compare(compose.bodyRevision, revision)
+      compare(compose.spellingRanges.length, 0)
+    }
+
     function test_a_correction_changes_the_body_and_undo_restores_it() {
       var body = named(compose, "compose-body-editor")
       verify(body)

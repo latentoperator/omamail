@@ -1,5 +1,6 @@
 import QtQuick
 import org.kde.sonnet as Sonnet
+import "SpellingSession.js" as Session
 
 // Optional spelling adapter (S01). This is the only production file that
 // imports org.kde.sonnet, so it is always created through a Loader: a machine
@@ -11,7 +12,8 @@ import org.kde.sonnet as Sonnet
 // paints the misspelled word red as well as underlining it (its errorFormat
 // sets a red foreground; misspelledColor is inert), unlike the QWidget one,
 // which only underlines. So the highlighter here stays inactive and is used
-// only as a checker: it never writes any format to the document.
+// only as a checker. Ignore can still cause a rehighlight notification, which
+// the editor must distinguish from an actual plain-text edit.
 Item {
   id: adapter
 
@@ -46,7 +48,12 @@ Item {
   readonly property string status: !enabled ? "disabled"
                                             : (available ? "ready" : "no-dictionary")
 
-  Component.onCompleted: applySettings()
+  signal checkerChanged()
+  Component.onCompleted: {
+    Session.subscribe(adapter)
+    applySettings()
+  }
+  Component.onDestruction: Session.unsubscribe(adapter)
   onEnabledChanged: applySettings()
   onLanguageChanged: applySettings()
   onPersonalWordsChanged: applyPersonalWords()
@@ -78,6 +85,7 @@ Item {
   function ignoreForSession(word) {
     if (!available || !word) return
     highlighter.ignoreWord(String(word))
+    Session.changed()
   }
 
   // Every misspelled word that is finished, as UTF-16 {start, end} offsets into
@@ -136,6 +144,7 @@ Item {
       var word = String(personalWords[i])
       if (word !== "") highlighter.ignoreWord(word)
     }
+    Session.changed()
   }
 
   onDocumentChanged: if (document !== null) highlighter.document = document

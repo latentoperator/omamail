@@ -72,6 +72,7 @@ Item {
     function menu() { return named(compose, "compose-text-menu") }
 
     function init() {
+      compose.parent.forceActiveFocus()
       compose.begin("new", null, "", [])
       tryVerify(function() { return compose.spellingAdapter !== null }, 3000)
       if (!compose.spellingAvailable) skip("spelling unavailable (" + compose.spellingStatus + ")")
@@ -220,6 +221,38 @@ Item {
       m.runCursor()
       wait(20)
       compare(editor.text, "a " + suggestion + " here")
+    }
+
+    function test_keyboard_opens_ignore_and_add_without_suggestions() {
+      var editor = body()
+      editor.text = "the zxqjklv here "
+      editor.cursorPosition = 8
+      compare(compose.spellingAdapter.inspect(8).suggestions.length, 0)
+      editor.forceActiveFocus()
+      keyClick(Qt.Key_Period, Qt.ControlModifier)
+      tryCompare(menu(), "opened", true)
+      compare(menu().spellingMisspelled, true)
+      verify(menu().ignoreWordRow.visible)
+      verify(menu().addToDictionaryRow.visible)
+      menu().close()
+    }
+
+    function test_menu_ignore_preserves_clean_draft_and_revision() {
+      var editor = body()
+      editor.text = "the zqxjmenureviewhere here "
+      editor.forceActiveFocus()
+      compose.userModified = false
+      compose.bodyWasEdited = false
+      var before = editor.text
+      var revision = compose.bodyRevision
+      clickWord(editor, "zqxjmenureviewhere")
+      menu().ignoreWordRow.activated()
+      wait(250)
+      compare(editor.text, before)
+      compare(compose.userModified, false)
+      compare(compose.bodyWasEdited, false)
+      compare(compose.bodyRevision, revision)
+      compare(compose.spellingRanges.length, 0)
     }
 
     function test_opening_and_closing_never_edits_or_dirties() {

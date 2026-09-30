@@ -125,7 +125,7 @@ DropArea {
     if (!adapter || !spellingAvailable) return false
     var position = bodyEdit.cursorPosition
     var info = adapter.inspect(position)
-    if (!info.misspelled || info.suggestions.length === 0) return false
+    if (!info.misspelled) return false
     textMenu.spellingPosition = position
     textMenu.spellingRevision = root.bodyRevision
     textMenu.spellingWord = info.word
@@ -1935,7 +1935,12 @@ DropArea {
       selectedTextColor: root.textColor
       font.family: root.panelFontFamily
       font.pixelSize: Style.font.bodySmall
+      property string lastPlainText: ""
       onTextChanged: {
+        // Sonnet can emit textChanged while rehighlighting an unchanged
+        // document. Only a plain-text change edits the draft or its revision.
+        if (text === lastPlainText) return
+        lastPlainText = text
         root.noteDraftChanged()
         if (!root.settingBodyText && activeFocus) {
           root.bodyWasEdited = true
@@ -2016,6 +2021,11 @@ DropArea {
     property: "language"
     value: root.spellingLanguage
     when: spellcheckLoader.item !== null
+  }
+
+  Connections {
+    target: spellcheckLoader.item
+    function onCheckerChanged() { spellingDebounce.restart() }
   }
 
   Rectangle {
