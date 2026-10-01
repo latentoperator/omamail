@@ -1038,6 +1038,7 @@ Item {
       if (service && starred !== "") service.toggleStar(starred)
       return
     }
+    if (id === "exportEml") return service ? service.exportFromView(currentView, cursorId) : false
     if (id === "toggleCheck") return toggleCheck(cursorId)
     if (id === "askAgent") {
       if (root.composing) { composeAgent.open(); return true }
