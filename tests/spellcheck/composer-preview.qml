@@ -34,6 +34,14 @@ Rectangle {
     function send(_f) { return true }
     function copyText(_t) { return true }
     function clipboardAttachment(_dir, callback) { callback({ ok: false, error: "no-image" }); return true }
+    // In-memory stand-in for the service's personal-word store, so Add to
+    // dictionary clears the underline here. The real store persists to
+    // spelling.json; this preview forgets the words when it closes.
+    property var spellingPersonalWords: []
+    function addPersonalWord(word) {
+      if (word && spellingPersonalWords.indexOf(word) < 0)
+        spellingPersonalWords = spellingPersonalWords.concat([word])
+    }
   }
 
   Omamail.ComposeView {
