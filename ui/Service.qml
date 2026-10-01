@@ -7,6 +7,7 @@ import "calendar"
 import "agent"
 import "backend"
 import "diagnostics"
+import "compose" as Compose
 import "agent/Agent.js" as Agent
 
 import "account/Accounts.js" as Accounts
@@ -140,7 +141,9 @@ Item {
     unifiedCalendarView: false,
     showBarIcon: true,
     unifiedMailboxes: false,
-    suggestEvents: false
+    suggestEvents: false,
+    spellingEnabled: true,
+    spellingLanguage: "en_US"
   })
   function normalizedSettings(values) {
     var next = ({})
@@ -424,7 +427,7 @@ Item {
   }
 
   function writeConfig(name, text, callback) {
-    var allowed = ["credentials.json", "window.json", "calendars.json"]
+    var allowed = ["credentials.json", "window.json", "calendars.json", "spelling.json"]
     if (allowed.indexOf(String(name || "")) < 0) {
       if (typeof callback === "function") callback(false, "Invalid configuration file")
       return false
@@ -626,6 +629,36 @@ Item {
   function setUnifiedMailboxes(value) {
     persistSetting("unifiedMailboxes", value === true)
   }
+
+  // ------------------------------------------------------------- spelling
+  //
+  // Spelling is local and optional: the composer loads the Sonnet adapter
+  // through a Loader, so a machine without the module or dictionary still
+  // composes. The enabled flag is the user's request; availability is a
+  // separate runtime fact reported by the probe, so "off because the user
+  // turned it off" and "off because en_US is missing" read differently.
+  readonly property bool spellingEnabled: !settings || settings.spellingEnabled !== false
+  function setSpellingEnabled(value) { persistSetting("spellingEnabled", value !== false) }
+  readonly property string spellingLanguage: settings
+    ? String(settings.spellingLanguage || "en_US") : "en_US"
+  function setSpellingLanguage(value) { persistSetting("spellingLanguage", String(value || "en_US")) }
+
+  // Whether Sonnet and the requested dictionary are actually loadable. The
+  // probe is separate from the per-composer adapter so the settings page can
+  // explain a missing module or dictionary before any compose window opens.
+  readonly property bool spellingAvailable: spellingProbe.status === Loader.Ready
+    && spellingProbe.item !== null && spellingProbe.item.available
+  readonly property string spellingStatus: spellingProbe.status === Loader.Error
+    ? "no-module" : (spellingProbe.item ? spellingProbe.item.status : "loading")
+
+  // App-owned personal words: compose/PersonalWords.qml stores them in
+  // spelling.json; the composer applies them.
+  Compose.PersonalWords { id: personalWords; service: root }
+  readonly property var spellingWordStore: personalWords
+  readonly property var spellingPersonalWords: personalWords.words
+  readonly property string spellingPersonalWordsError: personalWords.error
+  function addPersonalWord(word) { personalWords.add(word) }
+  function removePersonalWord(word) { personalWords.remove(word) }
 
   // ---------------------------------------------------------- the accounts
 
@@ -2690,6 +2723,23 @@ Item {
     onLoaded: root.applyWindowPrefs(text())
     // No file yet is the ordinary first-run state, not an error.
     onLoadFailed: root.applyWindowPrefs("")
+  }
+
+  // Availability probe: loads Sonnet once so the settings page can explain a
+  // missing module or dictionary without a compose window open. Its language
+  // follows the setting so the status is about the *requested* dictionary, not
+  // a default-English fallback.
+  Loader {
+    id: spellingProbe
+    active: true
+    source: "compose/SpellcheckAdapter.qml"
+  }
+
+  Binding {
+    target: spellingProbe.item
+    property: "language"
+    value: root.spellingLanguage
+    when: spellingProbe.item !== null
   }
 
   Timer {
