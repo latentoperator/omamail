@@ -71,6 +71,7 @@
     "mail.read",
     "mail.act",
     "mail.send",
+    "mail.exportEml",
     "mail.watch",
     "mail.unwatch",
     "mail.check",
@@ -189,11 +190,17 @@
       "params": {
         "query": "search:ALL",
         "continuation": "expired-snapshot",
-        "settings": {"username": "synthetic", "imapHost": "imap.example.invalid", "imapPort": 993},
+        "settings": {
+          "username": "synthetic",
+          "imapHost": "imap.example.invalid",
+          "imapPort": 993
+        },
         "credential": "synthetic:secret"
       },
       "errorCode": -32000,
-      "equals": {"message": "imap_search_expired"}
+      "equals": {
+        "message": "imap_search_expired"
+      }
     },
     {
       "name": "IMAP account search refuses a malformed page cursor",
@@ -201,35 +208,66 @@
       "params": {
         "query": "search:ALL",
         "pageToken": "not-a-page-cursor",
-        "settings": {"username": "synthetic", "imapHost": "imap.example.invalid", "imapPort": 993},
+        "settings": {
+          "username": "synthetic",
+          "imapHost": "imap.example.invalid",
+          "imapPort": 993
+        },
         "credential": "synthetic:secret"
       },
       "errorCode": -32602,
-      "equals": {"message": "Invalid params"}
+      "equals": {
+        "message": "Invalid params"
+      }
     },
     {
       "name": "IMAP text search includes archived mail",
       "method": "providers.resolve",
-      "params": {"provider": "imap", "operation": "query", "search": "subject:invoice"},
-      "equals": {"value": "search:SUBJECT \"invoice\""}
+      "params": {
+        "provider": "imap",
+        "operation": "query",
+        "search": "subject:invoice"
+      },
+      "equals": {
+        "value": "search:SUBJECT \"invoice\""
+      }
     },
     {
       "name": "Outlook text search includes archived mail",
       "method": "providers.resolve",
-      "params": {"provider": "outlook", "operation": "query", "search": "invoice"},
-      "equals": {"value": "search:TEXT \"invoice\""}
+      "params": {
+        "provider": "outlook",
+        "operation": "query",
+        "search": "invoice"
+      },
+      "equals": {
+        "value": "search:TEXT \"invoice\""
+      }
     },
     {
       "name": "IMAP address search includes archived mail",
       "method": "providers.resolve",
-      "params": {"provider": "imap", "operation": "addressQuery", "field": "from", "value": "ada@example.org"},
-      "equals": {"value": "search:FROM \"ada@example.org\""}
+      "params": {
+        "provider": "imap",
+        "operation": "addressQuery",
+        "field": "from",
+        "value": "ada@example.org"
+      },
+      "equals": {
+        "value": "search:FROM \"ada@example.org\""
+      }
     },
     {
       "name": "IMAP All mail resolves to account-wide listing",
       "method": "providers.resolve",
-      "params": {"provider": "imap", "operation": "query", "mailbox": "all"},
-      "equals": {"value": "search:ALL"}
+      "params": {
+        "provider": "imap",
+        "operation": "query",
+        "mailbox": "all"
+      },
+      "equals": {
+        "value": "search:ALL"
+      }
     },
     {
       "name": "iCloud request refuses an external credential origin",
@@ -807,10 +845,32 @@
       "types": {
         "ticket": "string"
       }
+    },
+    {
+      "name": "mail.exportEml refuses an unknown account without provider work",
+      "method": "mail.exportEml",
+      "params": {
+        "account": "imap:missing@example.invalid",
+        "id": "1:INBOX"
+      },
+      "errorCode": -32000,
+      "equals": {
+        "message": "mail_account_unknown"
+      }
     }
   ],
   "unreleased": {
-    "methods": [],
-    "cases": ["IMAP All mail resolves to account-wide listing", "IMAP text search includes archived mail", "Outlook text search includes archived mail", "IMAP address search includes archived mail", "IMAP account search refuses an expired work continuation", "IMAP account search refuses a malformed page cursor"]
+    "methods": [
+      "mail.exportEml"
+    ],
+    "cases": [
+      "IMAP All mail resolves to account-wide listing",
+      "IMAP text search includes archived mail",
+      "Outlook text search includes archived mail",
+      "IMAP address search includes archived mail",
+      "IMAP account search refuses an expired work continuation",
+      "IMAP account search refuses a malformed page cursor",
+      "mail.exportEml refuses an unknown account without provider work"
+    ]
   }
 }

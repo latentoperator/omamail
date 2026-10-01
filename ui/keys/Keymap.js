@@ -77,6 +77,12 @@ var BINDINGS = [
     hint: { list: "trash", reader: "trash" } },
   { id: "star", keys: ["s"], contexts: MAIL,
     group: "Acting", label: "Star or unstar" },
+  // Saving the message out as a file. It acts on one message like the other
+  // mail verbs, but it writes to the user's disk rather than to the mailbox,
+  // so it takes the modified key Thunderbird and Gmail put "Save as" on
+  // instead of a bare letter beside archive.
+  { id: "exportEml", keys: ["Ctrl+Shift+S"], contexts: MAIL,
+    group: "Acting", label: "Save as .eml" },
   // `v` because that is the key Gmail moves a message with, and issue #58 asks
   // for those shortcuts one for one. Not `m`: free here, but Gmail's `m` mutes
   // a conversation, and taking it for a move would be the one binding somebody
