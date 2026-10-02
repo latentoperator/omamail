@@ -272,7 +272,7 @@ Item {
       MenuRow {
         id: exportRow
         objectName: "message-menu-export-eml"
-        visible: !root.service || root.service.canExportEmlFor(root.messageId)
+        visible: !!root.service && root.service.canExportEmlFor(root.messageId)
         text: "Save as .eml"
         // Writes to the user's disk through the backend rather than through a
         // provider verb, so it goes straight to the service the way Open in
@@ -288,6 +288,7 @@ Item {
       MenuRow {
         id: aiRow
         objectName: "message-menu-ai"
+        enabled: !!root.service && root.service.agentAvailable !== false
         visible: !!root.service && root.service.hasAgent !== false
         text: "Ask AI..."
         onActivated: {

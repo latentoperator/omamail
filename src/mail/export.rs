@@ -24,17 +24,18 @@ use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 /// above the 20 MiB attachment limit. Checked before any unbounded allocation.
 pub(crate) const MAX_BYTES: usize = 25 * 1024 * 1024;
 
-/// The fixed operation deadline. It is enforced inside the export, under
-/// the client's 30 s bridge deadline, and never leaves a partial file.
+/// The fixed admission and retrieval deadline, checked again before file
+/// creation. After exclusive creation the synchronous write completes; a
+/// storage error removes the file, but process termination can interrupt it.
 pub(crate) const EXPORT_DEADLINE: Duration = Duration::from_secs(25);
 
-/// The frozen concurrency ceiling: one export per account, at most two overall.
+/// The fixed concurrency ceiling: one export per account, at most two overall.
 const GLOBAL_INFLIGHT: usize = 2;
 const ACCOUNT_INFLIGHT: usize = 1;
 
 /// The process-wide concurrency ceiling. Every RPC dispatch shares one of
-/// these, so a CLI client and the QML window cannot exceed the frozen limit by
-/// asking different accounts at once. Tests build their own, so they neither
+/// these, so different accounts share the same process limit. Tests build
+/// their own, so they neither
 /// contend with each other nor leave permits held for an unrelated case.
 pub(crate) struct ExportLimits {
     global: Arc<Semaphore>,
@@ -68,7 +69,10 @@ impl ExportLimits {
     }
 
     fn account(&self, account: &str) -> Arc<Semaphore> {
-        let mut accounts = self.accounts.lock().unwrap_or_else(|error| error.into_inner());
+        let mut accounts = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         accounts
             .entry(account.to_owned())
             .or_insert_with(|| Arc::new(Semaphore::new(ACCOUNT_INFLIGHT)))
@@ -80,7 +84,10 @@ impl ExportLimits {
     /// slot when dropped, so a later identical request is admitted again.
     fn admit(&self, account: &str, id: &str) -> Result<InFlight, &'static str> {
         let key = (account.to_owned(), id.to_owned());
-        let mut in_flight = self.in_flight.lock().unwrap_or_else(|error| error.into_inner());
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         if !in_flight.insert(key.clone()) {
             return Err("mail_export_in_flight");
         }
@@ -354,7 +361,30 @@ fn decode(data: &str) -> Result<Vec<u8>, &'static str> {
 /// reduced to a basename, control characters and separators are dropped, the
 /// name is capped, and `.eml` is appended exactly once.
 pub(crate) fn export_filename(suggested: &str) -> String {
-    let base = crate::attachment::safe_filename(suggested);
+    let base: String = crate::attachment::safe_filename(suggested)
+        .chars()
+        .map(|c| {
+            if matches!(c, ':' | '"' | '<' | '>' | '|' | '?' | '*') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    // Downloads is also used by the Windows host. A subject must never become
+    // a device name or an invalid native filename there.
+    let device = base.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let base = if matches!(
+        device.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || (device.starts_with("COM") || device.starts_with("LPT"))
+        && device.len() == 4
+        && matches!(device.as_bytes()[3], b'1'..=b'9')
+    {
+        format!("message-{base}")
+    } else {
+        base
+    };
     let base = if base == "attachment" {
         "message".to_owned()
     } else {
@@ -422,17 +452,15 @@ fn write_unique_in(
             libc::openat(
                 dir_fd,
                 cname.as_ptr(),
-                libc::O_WRONLY
-                    | libc::O_CREAT
-                    | libc::O_EXCL
-                    | libc::O_NOFOLLOW
-                    | libc::O_CLOEXEC,
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
                 0o600,
             )
         };
         if fd >= 0 {
             let mut file = unsafe { File::from_raw_fd(fd) };
-            if file.write_all(bytes).and_then(|_| file.sync_all()).is_err() {
+            if crate::platform::private_fs::validate_private_file(&file).is_err()
+                || file.write_all(bytes).and_then(|_| file.sync_all()).is_err()
+            {
                 unsafe { libc::unlinkat(dir_fd, cname.as_ptr(), 0) };
                 return Err("mail_export_write_failed");
             }
@@ -487,7 +515,10 @@ fn write_unique(directory: &Path, filename: &str, bytes: &[u8]) -> Result<PathBu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, sync::atomic::{AtomicUsize, Ordering}};
+    use std::{
+        fs,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     fn scratch(name: &str) -> PathBuf {
         static N: AtomicUsize = AtomicUsize::new(0);
@@ -502,6 +533,54 @@ mod tests {
     }
 
     #[test]
+    fn export_requires_an_explicit_account_without_creating_state() {
+        if crate::mail::tests::isolated() {
+            return;
+        }
+        let fixture = crate::mail::tests::account_fixture(json!({
+            "version": 1,
+            "activeId": "imap:owner@example.org",
+            "accounts": [{"provider": "imap", "email": "owner@example.org",
+                "imap": {"username": "owner@example.org"}}]
+        }));
+        let before = crate::mail::tests::fixture_tree(&fixture.root);
+        assert_eq!(
+            ExportRequest::try_from(&json!({"id": "1:INBOX"})).map(|_| ()),
+            Err("invalid_params")
+        );
+        for account in [
+            "",
+            "imap:missing@example.org",
+            "imap:owner@example.org\n",
+            "imap:owner@example.org\r",
+            "imap:owner@example.org\r\n",
+            "imap:owner@example.org\0",
+        ] {
+            assert_eq!(
+                ExportRequest::try_from(&json!({"account": account, "id": "1:INBOX"})).map(|_| ()),
+                Err("mail_account_unknown")
+            );
+            assert_eq!(crate::mail::tests::fixture_tree(&fixture.root), before);
+        }
+        for params in [
+            json!({"account": "imap:owner@example.org", "id": "1:INBOX", "path": "/tmp/other.eml"}),
+            json!({"account": "imap:owner@example.org", "id": "1:INBOX", "suggestedName": "subject\n"}),
+            json!({"account": "imap:owner@example.org", "id": "1:INBOX\0"}),
+        ] {
+            assert_eq!(
+                ExportRequest::try_from(&params).map(|_| ()),
+                Err("invalid_params")
+            );
+            assert_eq!(crate::mail::tests::fixture_tree(&fixture.root), before);
+        }
+        let request =
+            ExportRequest::try_from(&json!({"account": "imap:owner@example.org", "id": "1:INBOX"}))
+                .unwrap();
+        assert_eq!(request.account.id, "imap:owner@example.org");
+        assert_eq!(crate::mail::tests::fixture_tree(&fixture.root), before);
+    }
+
+    #[test]
     fn names_are_safe_and_get_one_eml_suffix() {
         assert_eq!(export_filename("Project update"), "Project update.eml");
         assert_eq!(export_filename("report.eml"), "report.eml");
@@ -510,9 +589,45 @@ mod tests {
         assert_eq!(export_filename(""), "message.eml");
         assert_eq!(export_filename(".."), "message.eml");
         assert_eq!(export_filename("a\nb"), "a_b.eml");
+        assert_eq!(
+            export_filename("Re: Project update?"),
+            "Re_ Project update_.eml"
+        );
+        assert_eq!(export_filename("NUL.eml"), "message-NUL.eml");
+        assert_eq!(export_filename("com1"), "message-com1.eml");
+        assert_eq!(export_filename("AUX.notes.eml"), "message-AUX.notes.eml");
         let long = export_filename(&format!("{}.eml", "x".repeat(400)));
         assert!(long.len() <= 240);
         assert!(long.ends_with(".eml"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_inherited_read_acl_never_exposes_exported_bytes() {
+        let dir = scratch("inherited-acl");
+        assert!(
+            std::process::Command::new("/bin/chmod")
+                .args(["+a", "everyone allow read,file_inherit"])
+                .arg(&dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let result = write_unique(&dir, "private.eml", b"private message bytes");
+        assert_eq!(result, Err("mail_export_write_failed"));
+        assert!(
+            !dir.join("private.eml").exists(),
+            "a refused file must be removed"
+        );
+        assert!(
+            std::process::Command::new("/bin/chmod")
+                .arg("-N")
+                .arg(&dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -678,7 +793,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_payload_column_is_incomplete() {
-        assert_eq!(run(json!({"bytes": 1})).await, Err("mail_export_incomplete"));
+        assert_eq!(
+            run(json!({"bytes": 1})).await,
+            Err("mail_export_incomplete")
+        );
         assert_eq!(
             run(json!({"data": "not base64!"})).await,
             Err("mail_export_incomplete")
@@ -724,12 +842,28 @@ mod tests {
     #[tokio::test]
     async fn malformed_message_ids_use_the_export_refusal() {
         let dir = scratch("invalid-id");
-        for id in ["", "INBOX", "0:INBOX", "4294967296:INBOX", "1:", "1:IN\nBOX"] {
+        for id in [
+            "",
+            "INBOX",
+            "0:INBOX",
+            "4294967296:INBOX",
+            "1:",
+            "1:IN\nBOX",
+        ] {
             let mut request = request();
             request.id = id.into();
-            assert_eq!(export_with(request, &Fake { payload: json!({}) }, &dir,
-                &Value::Null, &ExportLimits::new(), &ExportControl::new()).await,
-                Err("mail_export_message_invalid"));
+            assert_eq!(
+                export_with(
+                    request,
+                    &Fake { payload: json!({}) },
+                    &dir,
+                    &Value::Null,
+                    &ExportLimits::new(),
+                    &ExportControl::new()
+                )
+                .await,
+                Err("mail_export_message_invalid")
+            );
         }
         assert!(fs::read_dir(&dir).unwrap().next().is_none());
         fs::remove_dir_all(dir).unwrap();
@@ -765,16 +899,9 @@ mod tests {
         let limits = ExportLimits::new();
         let control = ExportControl::new();
         let adapter = Counting::new();
-        let results = futures_util::future::join_all((0..3).map(|_| {
-            export_with(
-                request(),
-                &adapter,
-                &dir,
-                &Value::Null,
-                &limits,
-                &control,
-            )
-        }))
+        let results = futures_util::future::join_all(
+            (0..3).map(|_| export_with(request(), &adapter, &dir, &Value::Null, &limits, &control)),
+        )
         .await;
         let ok = results.iter().filter(|r| r.is_ok()).count();
         let refused = results
@@ -825,17 +952,13 @@ mod tests {
         let results = futures_util::future::join_all((0..3).map(|n| {
             let mut request = request();
             request.id = format!("{}:INBOX", n + 1);
-            export_with(
-                request,
-                &adapter,
-                &dir,
-                &Value::Null,
-                &limits,
-                &control,
-            )
+            export_with(request, &adapter, &dir, &Value::Null, &limits, &control)
         }))
         .await;
-        assert!(results.iter().all(Result::is_ok), "three different messages commit");
+        assert!(
+            results.iter().all(Result::is_ok),
+            "three different messages commit"
+        );
         assert_eq!(adapter.peak.load(Ordering::SeqCst), 1);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -848,18 +971,13 @@ mod tests {
         let control = ExportControl::new();
         let adapter = Counting::new();
         let results = futures_util::future::join_all(
-            ["imap:a@example.test", "imap:b@example.test", "imap:c@example.test"]
-                .map(request_for)
-                .map(|request| {
-                    export_with(
-                        request,
-                        &adapter,
-                        &dir,
-                        &Value::Null,
-                        &limits,
-                        &control,
-                    )
-                }),
+            [
+                "imap:a@example.test",
+                "imap:b@example.test",
+                "imap:c@example.test",
+            ]
+            .map(request_for)
+            .map(|request| export_with(request, &adapter, &dir, &Value::Null, &limits, &control)),
         )
         .await;
         assert!(results.iter().all(Result::is_ok), "every export committed");
@@ -983,7 +1101,10 @@ mod tests {
         let b_ran = tokio::time::timeout(Duration::from_millis(500), b_started.notified())
             .await
             .is_ok();
-        assert!(b_ran, "account b must run while account a is still exporting");
+        assert!(
+            b_ran,
+            "account b must run while account a is still exporting"
+        );
 
         gate.add_permits(3);
         assert!(a1.await.unwrap().is_ok());
@@ -1017,8 +1138,14 @@ mod tests {
             &Cancellation::default(),
         )
         .unwrap();
-        assert!(renamed.join("note.eml").exists(), "written to the anchored directory");
-        assert!(!outside.join("note.eml").exists(), "not redirected through the symlink");
+        assert!(
+            renamed.join("note.eml").exists(),
+            "written to the anchored directory"
+        );
+        assert!(
+            !outside.join("note.eml").exists(),
+            "not redirected through the symlink"
+        );
         assert_eq!(fs::read(renamed.join("note.eml")).unwrap(), b"payload");
         fs::remove_dir_all(dir).unwrap();
     }

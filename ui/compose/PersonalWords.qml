@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell.Io
+import "Spelling.js" as Spelling
 
 // App-owned personal spelling words, persisted as spelling.json beside the
 // window state and applied by the composer. Never written to a global
@@ -21,23 +22,10 @@ Item {
   property bool pending: false
   property string error: ""
 
-  function normalize(raw) {
-    var parsed = null
-    try { parsed = JSON.parse(String(raw || "")) } catch (e) { parsed = null }
-    var list = (parsed && Array.isArray(parsed.words)) ? parsed.words : []
-    var next = []
-    for (var i = 0; i < list.length; i++) {
-      var word = list[i]
-      if (typeof word !== "string") continue
-      if (word !== "" && next.indexOf(word) < 0) next.push(word)
-    }
-    return next
-  }
-
   // Replace the list. The file load uses `merge` below; this is the explicit
   // reset form and what the tests drive.
   function apply(raw) {
-    words = normalize(raw)
+    words = Spelling.normalizePersonalWords(raw)
     loaded = true
     if (pending) save()
   }
@@ -46,12 +34,7 @@ Item {
   // not replace: the in-memory additions are this session's intent and the
   // disk copy is yesterday's.
   function merge(raw) {
-    var onDisk = normalize(raw)
-    var next = words.slice()
-    for (var i = 0; i < onDisk.length; i++) {
-      if (next.indexOf(onDisk[i]) < 0) next.push(onDisk[i])
-    }
-    words = next
+    words = Spelling.mergePersonalWords(words, raw)
     loaded = true
     if (pending) save()
   }

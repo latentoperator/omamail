@@ -12,6 +12,7 @@ import "../message/Unsubscribe.js" as Unsub
 import "../message/Outbox.js" as Outbox
 import "Model.js" as Model
 import "Accounts.js" as Accounts
+import "MessageActions.js" as MessageActions
 import "../providers/Registry.js" as Provider
 import "../providers/ImapProtocol.js" as Imap
 import "../providers/OAuth.js" as OAuth
@@ -2021,6 +2022,7 @@ Item {
       note("Already saving a message as .eml")
       return false
     }
+    clearNotice()
     var parameters = {account: accountId, id: target, suggestedName: subjectForEml(target)}
     exportingEml = true
     exportingEmlId = target
@@ -2031,11 +2033,10 @@ Item {
       root.exportingEml = false
       root.exportingEmlId = ""
       if (error) {
-        var message = error && error.message ? error.message : String(error || "")
-        root.fail(message || "Could not save the message as .eml")
+        root.fail(MessageActions.exportErrorText(error))
         return
       }
-      root.note("Saved " + String(result.filename || "") + " to " + String(result.path || ""))
+      root.note(MessageActions.exportSavedNotice(result))
     })
     return true
   }
@@ -2366,8 +2367,9 @@ Item {
     for (var fi = 0; fi < files.length; fi++) {
       if (files[fi] && (files[fi].data || files[fi].path)) hasFiles = true
     }
-    var body = String(values.body || "").trim()
-    if (body === "" && !hasFiles) {
+    var body = String(values.body || "")
+    if (values.exactBody !== true) body = body.trim()
+    if (body.trim() === "" && !hasFiles) {
       fail("Write something before sending")
       return false
     }
@@ -2430,6 +2432,8 @@ Item {
 
   // See `Rsvp.qml`: the account file is at its size ceiling.
   function rsvp(response) { rsvpAction.run(response) }
+  readonly property bool rsvpFallbackAvailable: rsvpAction.fallbackAvailable
+  function rsvpMailOnly(response) { rsvpAction.run(response, true) }
   readonly property alias bodies: bodyCache
 
   Rsvp {

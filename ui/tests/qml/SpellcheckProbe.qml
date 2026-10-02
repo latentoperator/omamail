@@ -5,8 +5,7 @@ import org.kde.sonnet as Sonnet
 // It is loaded through a Loader so a machine without the module reports a
 // loader error to the probe instead of failing the whole test file to import.
 //
-// The adapter the real feature will use is provisional; this exists to prove
-// the runtime behaviour the adapter must rely on.
+// This isolates the Sonnet runtime behavior used by the production adapter.
 Item {
   id: probe
 
@@ -29,9 +28,10 @@ Item {
   function ignore(word) { highlighter.ignoreWord(word) }
   function setLanguage(language) { highlighter.setCurrentLanguage(language) }
 
+  onEditorChanged: if (editor !== null) highlighter.document = editor.textDocument
+
   Sonnet.SpellcheckHighlighter {
     id: highlighter
-    document: probe.editor ? probe.editor.textDocument : null
     active: true
     automatic: false
     // misspelledColor is not set: it has no effect on the rendered underline

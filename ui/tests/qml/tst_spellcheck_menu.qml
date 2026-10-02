@@ -38,12 +38,22 @@ Item {
     }
   }
 
+  Omamail.KeyRouter {
+    id: keyRouter
+    context: "compose"
+    onTriggered: function(id, sequence) {
+      if (id === "spellingSuggestions") compose.openSpellingAtCaret()
+    }
+  }
+
   Omamail.ComposeView {
     id: compose
+    onKeyPressed: function(event) { keyRouter.routeKeyEvent(event) }
     anchors.fill: parent
     service: mailService
     spellingPersonalWords: mailService.spellingPersonalWords
     textColor: Qt.rgba(1, 1, 1, 1)
+    errorColor: Qt.rgba(1, 1, 1, 1)
     backgroundColor: Qt.rgba(0.06, 0.06, 0.06, 1)
     accentColor: Qt.rgba(1, 0.5, 0, 1)
     dimColor: Qt.rgba(0.67, 0.67, 0.67, 1)

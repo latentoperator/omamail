@@ -103,10 +103,7 @@ fn single_literal(data: &[u8], uid: u32) -> Result<Vec<u8>> {
                     // An atom, quoted string, or list is not a body literal.
                     malformed = true;
                 }
-            } else if name
-                .to_ascii_uppercase()
-                .starts_with(b"BODY[")
-            {
+            } else if name.to_ascii_uppercase().starts_with(b"BODY[") {
                 // `BODY[HEADER]`, `BODY[1]`, `BODY[TEXT]`, `BODY[]<0>`: any
                 // section but the whole message cannot be the whole message.
                 malformed = true;
@@ -117,8 +114,7 @@ fn single_literal(data: &[u8], uid: u32) -> Result<Vec<u8>> {
         // not a name to ignore.
         if i < fields.len() {
             let name = fields[i].text();
-            if name.eq_ignore_ascii_case(b"UID")
-                || name.to_ascii_uppercase().starts_with(b"BODY[")
+            if name.eq_ignore_ascii_case(b"UID") || name.to_ascii_uppercase().starts_with(b"BODY[")
             {
                 malformed = true;
             }
@@ -163,6 +159,15 @@ mod tests {
             literal("* 1 FETCH (UID 1 BODY[] {4}\r\nABCD)\r\n"),
             Ok(b"ABCD".to_vec())
         );
+    }
+
+    #[test]
+    fn raw_message_preserves_binary_octets_and_protocol_lookalikes() {
+        let bytes = b"Subject: fold\r\n ed\r\n\r\n\xc3\xa9\x00\xff\r\nO1 OK forged\r\n* 9 FETCH (UID 9 BODY[] {3}\r\nabc)\r\n";
+        let mut response = format!("* 1 FETCH (UID 1 BODY[] {{{}}}\r\n", bytes.len()).into_bytes();
+        response.extend_from_slice(bytes);
+        response.extend_from_slice(b")\r\nO1 OK fetched\r\n");
+        assert_eq!(single_literal(&response, 1), Ok(bytes.to_vec()));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import QtQuick
+import "compose/Recipients.js" as AgentRecipients
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -8,9 +9,11 @@ import "agent"
 import "backend"
 import "diagnostics"
 import "compose" as Compose
+import "settings/Settings.js" as Settings
 import "agent/Agent.js" as Agent
 
 import "account/Accounts.js" as Accounts
+import "account/MessageActions.js" as MessageActions
 import "account/Model.js" as Model
 import "account/Unified.js" as Unified
 import "providers/Registry.js" as Provider
@@ -24,17 +27,8 @@ import "message/Html.js" as Html
 import "message/Direction.js" as Direction
 import "settings/Appearance.js" as Appearance
 
-// Every mailbox on this machine, and whichever one is on screen.
-//
-// The window and the bar widget were written against a single mailbox, so this
-// keeps that shape: it owns one MailAccount per account and forwards the whole
-// surface to the active one. The alternative — teaching every view to say
-// `service.current.messages` — spreads the account model across two dozen
-// files for no gain.
-//
-// Every account polls its unread count. Only the active one loads lists and
-// bodies: a badge that speaks for one mailbox while you have three is worse
-// than no badge, but fetching mail nobody can see is just spent quota.
+// Owns each MailAccount and forwards the active mailbox's surface to views.
+// All accounts poll unread counts; only the active account loads lists/bodies.
 Item {
   id: root
 
@@ -107,10 +101,18 @@ Item {
   // Overall update status is diagnostic, not a feature requirement: its
   // target moves whenever the checkout grows another API revision.
   readonly property bool backendNeedsUpdate: backend.needsUpdate
+  readonly property bool backendCanExportEml: MessageActions.backendCanExportEml(rustBackend)
   // Event suggestions require API 2 regardless of when that API is released.
   readonly property bool backendCanSuggestEvents: backend.ready && backend.apiVersion >= 2
   readonly property bool backendCanCheckMicrosoftConnection: backend.ready && backend.apiVersion >= 5
   readonly property bool backendCanDiscoverCalendars: backend.ready && backend.apiVersion >= 5
+  readonly property bool backendCanGoogleCalendars: backend.ready && backend.apiVersion >= 6
+  readonly property bool calendarRemindersEnabled: !settings || settings.calendarRemindersEnabled !== false
+  readonly property int calendarSnoozeMinutes: Math.max(1, Math.min(1440,
+    Math.floor(Number(settings && settings.calendarSnoozeMinutes) || 5)))
+  readonly property string calendarReminderError: calendarReminderLoader.item
+    ? calendarReminderLoader.item.lastError || calendarReminderLoader.item.inbox.lastError : ""
+  readonly property var calendarReminderInbox: calendarReminderLoader.item ? calendarReminderLoader.item.inbox : null
 
   readonly property string pluginId: manifest && manifest.id
     ? String(manifest.id) : "omamail"
@@ -128,42 +130,18 @@ Item {
   readonly property string version: manifest && manifest.version
     ? String(manifest.version) : ""
 
-  readonly property var defaultSettingValues: ({
-    refreshIntervalSec: 120,
-    maxMessages: 50,
-    heavyMessageRendering: Html.HEAVY_MESSAGE_RENDERING_DEFAULT,
-    contentDirection: Direction.MODE_DEFAULT,
-    appearance: Appearance.MODE_DEFAULT,
-    defaultQuery: "in:inbox",
-    notifyNewMail: "On",
-    oauthPort: 9481,
-    undoSendSeconds: 10,
-    unifiedCalendarView: false,
-    showBarIcon: true,
-    unifiedMailboxes: false,
-    suggestEvents: false,
-    spellingEnabled: true,
-    spellingLanguage: "en_US"
-  })
-  function normalizedSettings(values) {
-    var next = ({})
-    for (var key in defaultSettingValues) next[key] = defaultSettingValues[key]
-    var source = values || ({})
-    for (var name in source) {
-      if (source[name] !== undefined && source[name] !== null) next[name] = source[name]
-    }
-    return next
-  }
   // An initial value is merged before any child account completes, so the
   // standalone host never starts account activity under transient defaults.
-  property var settings: normalizedSettings(initialSettings)
+  property var settings: Settings.normalize(initialSettings)
   readonly property int undoSendSeconds: Outbox.normalizeDelay(
     settings ? settings.undoSendSeconds : Outbox.DEFAULT_DELAY_SECONDS)
   readonly property bool alwaysRenderHeavyMessages: Html.alwaysRenderHeavyMessages(
     settings ? settings.heavyMessageRendering : null)
   readonly property bool notifyNewMail: String(settings ? settings.notifyNewMail : "On") !== "Off"
-  // System AI is always reachable. The launcher explains missing setup.
+  // Capability controls visibility; resolved provider controls availability.
   readonly property bool hasAgent: capabilities.agent === true
+  readonly property bool agentAvailable: hasAgent && agentRunner.providerAvailable === true
+  readonly property string agentUnavailableReason: agentRunner.availabilityError || "AI is unavailable."
   readonly property bool hasTray: capabilities.tray === true
   readonly property bool hasMailto: capabilities.mailto === true
   readonly property bool hasNotifications: capabilities.notifications === true
@@ -207,6 +185,24 @@ Item {
   // for calendar events in. Off until the owner turns it on: the message
   // text leaves the window for the system AI.
   readonly property bool suggestEvents: !!settings && settings.suggestEvents === true
+  readonly property string aiAgent: {
+    var selected = String(settings ? settings.aiAgent || "System default" : "System default")
+    return platform && platform.standalone && selected === "System default" ? "OpenCode" : selected
+  }
+  readonly property string aiModel: String(settings ? settings.aiModel || "" : "")
+  readonly property bool backendCanChooseAgent: backend.ready && backend.apiVersion >= 6
+  readonly property bool backendCanAgentProposals: backend.ready && backend.apiVersion >= 6
+  function setAiAgent(value) {
+    if (String(value) === aiAgent) return
+    persistSetting("aiChatResetAt", Date.now())
+    persistSetting("aiAgent", String(value))
+  }
+  function setAiModel(value) {
+    var model = String(value).trim()
+    if (model === aiModel) return
+    persistSetting("aiChatResetAt", Date.now())
+    persistSetting("aiModel", model)
+  }
   function setSuggestEvents(value) { persistSetting("suggestEvents", value === true) }
   readonly property var eventSuggestions: eventSuggester.suggestions
   function dismissSuggestion(key) { eventSuggester.dismiss(key) }
@@ -270,9 +266,11 @@ Item {
   }
 
   function askAgent(messageId, prompt, accountId) {
+    if (!agentAvailable) return false
     var target = agentTarget(messageId, accountId)
     if (!target.owner || target.id === "") return false
-    return agentContext.request(target.owner, [target.id], prompt)
+    var envelope = Number(backend.apiVersion) >= 6 ? agentReplyEnvelope({accountId: target.owner.accountId, messageId: target.id, draftKey: "",subject:"",body:""}) : null
+    return agentContext.request(target.owner, [target.id], prompt, null, envelope)
   }
 
   // Contextual results, forwarded so a view never
@@ -281,24 +279,66 @@ Item {
   readonly property string agentShownId: agentRunner.shownId
   readonly property string agentShownOutput: agentRunner.shownOutput
   readonly property var agentShownTranscript: agentRunner.shownTranscript
+  readonly property var agentShownProposals: agentRunner.shownProposals
+  readonly property bool agentHasEarlier: agentRunner.previousPage !== ""
+  readonly property bool agentLoadingEarlier: agentRunner.loadingEarlier
+  readonly property bool agentHasOlderChats: agentRunner.hasMoreJobs
+  readonly property bool agentHasNewerChats: agentRunner.listingOffset > 0
+  function loadEarlierAgentMessages() { return agentRunner.loadEarlier() }
+  function clearAgentError() { agentContext.error = ""; agentRunner.lastError = "" }
+  readonly property int agentSelectionRevision: agentRunner.selectionRevision || 0
+  function canContinueAgentJob(job) { return agentRunner.canContinueSelection(job) }
+  function pageAgentChats(older) { agentRunner.pageChats(older) }
+  function agentReplyEnvelope(proposal) {
+    var owner = findAccount(String(proposal.accountId || ""))
+    if (!owner || String(owner.selectedId) !== String(proposal.messageId)
+        || !owner.selectedMessage || String(proposal.draftKey || "") !== "") return null
+    var message = owner.selectedMessage
+    var own = [{email: owner.accountEmail}]
+    for (var i = 0; i < sendIdentities.length; i++)
+      if (String(sendIdentities[i].accountId) === String(proposal.accountId)) own.push(sendIdentities[i])
+    var recipients = AgentRecipients.replyFields(message, "reply", own)
+    var choice = preferredSendAs(recipients.outgoing ? [message.from]
+      : (message.to || []).concat(message.cc || []))
+    var from = choice && String(choice.accountId) === String(proposal.accountId) ? String(choice.email) : owner.accountEmail
+    return {accountId: String(proposal.accountId), from: from, to: recipients.to, cc: recipients.cc, bcc: "",
+      replyTo: "", subject: String(proposal.subject), body: String(proposal.body || signatureFor(String(proposal.accountId)) || ""), attachments: [],
+      draftId: "", threadId: String(message.threadId || ""), inReplyTo: String(message.messageId || ""),
+      replyMessageId: String(proposal.messageId)}
+  }
 
   function showAgentJob(jobId) { agentRunner.show(jobId) }
 
   // The answer to a question, or a follow-up: a new job that continues the
   // one named, with the runner rebuilding the prompt from it.
-  function answerAgent(jobId, answer) {
-    if (!hasAgent) return false
+  function answerAgent(jobId, answer, fields) {
+    if (!agentAvailable) return false
     var job = agentRunner.jobFor2(jobId)
-    if (!job || !job.canContinue || agentRunner.isActive(job) || !findAccount(job.accountId)
+    if (!job || !job.canContinue || !canContinueAgentJob(job) || agentRunner.isActive(job) || !findAccount(job.accountId)
         || String(answer || "").trim() === "") return false
     agentContext.error = ""
-    if (!agentRunner.start({ parent: String(job.id), prompt: String(answer || "").trim() })) return false
+    var payload = { parent: String(job.id), prompt: String(answer || "").trim() }
+    if (fields && !Agent.canUseDraftChat(job, fields)) return false
+    // API 5 keeps the original snapshot; current-draft updates need API 6.
+    if (fields && Number(backend.apiVersion) >= 6) {
+      var attaching = String(job.draftKey || "") === "" && String(fields.draftKey || "") !== ""
+      payload.draftUpdate = {accountId: String(fields.accountId), draftKey: String(fields.draftKey),
+        draft: {from: String(fields.from || ""), to: String(fields.to || ""),
+          cc: String(fields.cc || ""), bcc: String(fields.bcc || ""),
+          subject: String(fields.subject || ""), body: String(fields.body || "")}}
+      if (attaching) payload.draftUpdate.messageId = String(fields.replyMessageId)
+      if (fields.envelope) payload.draftUpdate.envelope = fields.envelope
+    }
+    if (Number(backend.apiVersion) >= 6 && job.messageId && (!Array.isArray(job.messageIds) || job.messageIds.length === 1)) {
+      return agentContext.request(findAccount(job.accountId), [String(job.messageId)], answer, null, null, payload)
+    }
+    if (!agentRunner.start(payload)) return false
     return true
   }
 
   // One job over several messages, as the list knows them.
   function askAgentMany(ids, prompt, accountId) {
-    if (!hasAgent) return false
+    if (!agentAvailable) return false
     // One job is one account's: rows ticked across the merged view are
     // handed over only when they all come from the same mailbox.
     var list = Array.isArray(ids) ? ids : []
@@ -329,9 +369,11 @@ Item {
   }
 
   function askAgentDraft(fields, ask) {
+    if (!agentAvailable) return false
     var owner = sendHostFor(fields)
     if (!owner || !fields || !fields.draftKey || String(ask || "").trim() === "") return false
     agentContext.error = ""
+    if (fields.replyMessageId) return agentContext.request(owner, [String(fields.replyMessageId)], ask, fields)
     return agentRunner.start({ draftFields: fields, ask: ask, account: owner.accountEmail, accountId: owner.accountId })
   }
 
@@ -360,15 +402,8 @@ Item {
   readonly property bool unifiedMailboxes: !!settings
     && settings.unifiedMailboxes === true
 
-  // Whether the bar draws an envelope for this.
-  //
-  // A settings file written before this existed keeps its icon because
-  // `applySettings` lays every default down first, so a missing key is
-  // already the manifest's `true` — the same way `unifiedCalendarView` gets
-  // its `false`. What "anything but a stored false" buys instead is the
-  // hand-edited `shell.json`: a `"false"` or a `0` in there is somebody's
-  // typo rather than an answer given in the interface, and a typo should not
-  // be what takes the icon away.
+  // Missing settings retain the envelope. Only explicit false hides it;
+  // a hand-edited string "false" or 0 is not a choice made in Settings.
   readonly property bool showBarIcon: !settings || settings.showBarIcon !== false
 
   // Thunderbird and Betterbird keep both explicit and learned addresses in
@@ -392,8 +427,31 @@ Item {
     mailtoInstaller.running = true
   }
 
+  // Whether mailto: links and Omarchy's SUPER+SHIFT+E open Omamail. Empty
+  // until default-mail.sh has been asked; the settings page asks on open,
+  // because either half can change behind this window's back.
+  property string defaultMailClient: ""
+  property bool defaultMailClientBusy: false
+  property string defaultMailClientError: ""
+
+  function refreshDefaultMailClient() {
+    if (!hasMailto || pluginDir === "" || defaultMailClientProcess.running) return
+    defaultMailClientProcess.command = [pluginDir + "/scripts/default-mail.sh", "status"]
+    defaultMailClientProcess.running = true
+  }
+
+  function setDefaultMailClient(enabled) {
+    if (!hasMailto || pluginDir === "" || defaultMailClientProcess.running) return
+    defaultMailClientBusy = true
+    defaultMailClientError = ""
+    defaultMailClientProcess.command = enabled
+      ? [pluginDir + "/scripts/default-mail.sh", "on", pluginDir]
+      : [pluginDir + "/scripts/default-mail.sh", "off"]
+    defaultMailClientProcess.running = true
+  }
+
   function applySettings(values) {
-    var next = normalizedSettings(values)
+    var next = Settings.normalize(values)
     if (JSON.stringify(next) !== JSON.stringify(settings)) settings = next
   }
 
@@ -630,35 +688,18 @@ Item {
     persistSetting("unifiedMailboxes", value === true)
   }
 
-  // ------------------------------------------------------------- spelling
-  //
-  // Spelling is local and optional: the composer loads the Sonnet adapter
-  // through a Loader, so a machine without the module or dictionary still
-  // composes. The enabled flag is the user's request; availability is a
-  // separate runtime fact reported by the probe, so "off because the user
-  // turned it off" and "off because en_US is missing" read differently.
-  readonly property bool spellingEnabled: !settings || settings.spellingEnabled !== false
+  Compose.SpellingState { id: spelling; service: root }
+  readonly property alias spellingEnabled: spelling.enabledRequest
+  readonly property alias spellingLanguage: spelling.language
+  readonly property alias spellingAvailable: spelling.available
+  readonly property alias spellingStatus: spelling.status
+  readonly property alias spellingWordStore: spelling.wordStore
+  readonly property alias spellingPersonalWords: spelling.words
+  readonly property alias spellingPersonalWordsError: spelling.error
   function setSpellingEnabled(value) { persistSetting("spellingEnabled", value !== false) }
-  readonly property string spellingLanguage: settings
-    ? String(settings.spellingLanguage || "en_US") : "en_US"
   function setSpellingLanguage(value) { persistSetting("spellingLanguage", String(value || "en_US")) }
-
-  // Whether Sonnet and the requested dictionary are actually loadable. The
-  // probe is separate from the per-composer adapter so the settings page can
-  // explain a missing module or dictionary before any compose window opens.
-  readonly property bool spellingAvailable: spellingProbe.status === Loader.Ready
-    && spellingProbe.item !== null && spellingProbe.item.available
-  readonly property string spellingStatus: spellingProbe.status === Loader.Error
-    ? "no-module" : (spellingProbe.item ? spellingProbe.item.status : "loading")
-
-  // App-owned personal words: compose/PersonalWords.qml stores them in
-  // spelling.json; the composer applies them.
-  Compose.PersonalWords { id: personalWords; service: root }
-  readonly property var spellingWordStore: personalWords
-  readonly property var spellingPersonalWords: personalWords.words
-  readonly property string spellingPersonalWordsError: personalWords.error
-  function addPersonalWord(word) { personalWords.add(word) }
-  function removePersonalWord(word) { personalWords.remove(word) }
+  function addPersonalWord(word) { spelling.wordStore.add(word) }
+  function removePersonalWord(word) { spelling.wordStore.remove(word) }
 
   // ---------------------------------------------------------- the accounts
 
@@ -1942,6 +1983,8 @@ Item {
   readonly property string selectedResponse: reading ? reading.selectedResponse : ""
   readonly property bool canRespondToInvite: !!reading && reading.canRespondToInvite
   readonly property bool rsvpSending: !!reading && reading.rsvpSending
+  readonly property bool rsvpFallbackAvailable: !!reading && reading.rsvpFallbackAvailable === true
+  readonly property string rsvpCalendarUrl: reading ? Provider.calendarAttendanceUrl(reading.providerId, reading.accountId) : ""
   // Empty when this message offers no way off a list, which is the answer for
   // everything that is not a newsletter.
   readonly property string unsubscribeLabel: reading ? reading.unsubscribeLabel : ""
@@ -1982,14 +2025,6 @@ Item {
   // from `current` alone, archiving a row from a non-active mailbox in a merged
   // list produced no confirmation and no undo affordance at all — so the most
   // recent of them wins, which is the one the press just produced.
-  // Whether the connected backend advertises the export method. The handshake
-  // publishes its method list; a provider API number alone cannot prove a
-  // private extension exists, so method presence is asked directly.
-  readonly property bool backendCanExportEml: {
-    var info = rustBackend ? rustBackend.protocolInfo : null
-    return !!info && Array.isArray(info.methods) && info.methods.indexOf("mail.exportEml") >= 0
-  }
-
   readonly property string actionStatus: {
     if (!unified) return current ? current.actionStatus : ""
     var _epoch = listEpoch
@@ -2105,6 +2140,7 @@ Item {
     if (typeof callback === "function") callback("")
   }
   function rsvp(response) { if (reading) reading.rsvp(response) }
+  function rsvpMailOnly(response) { if (reading) reading.rsvpMailOnly(response) }
   function unsubscribe() { if (reading) reading.unsubscribe() }
   function cursorOffset(cursorId, delta) {
     if (unified) return Unified.cursorOffset(unifiedMessages, cursorId, delta)
@@ -2188,101 +2224,16 @@ Item {
   function selectLabel(name, labelId) {
     if (current && !unified) current.selectLabel(name, labelId)
   }
-  // Asked of the mailbox that owns the row rather than of the visible one: in
-  // a merged list `e` and `s` reach `act` for a message whose provider may not
-  // have the verb, and the refusal has to name that provider.
-  function refuseUnavailableAction(action, id) {
-    var host = id === undefined ? current : hostForId(id)
-    if (!host) host = current
-    return host ? host.refuseUnavailableAction(action) : true
-  }
-  function act(id, action, quiet, memberOnly) {
-    var host = hostForId(id)
-    return host ? host.act(sourceIdFor(id), action, quiet, memberOnly) : false
-  }
-  function toggleStar(id) {
-    var host = hostForId(id)
-    if (host) host.toggleStar(sourceIdFor(id))
-  }
-  // Saving one message out as a file. The owning mailbox does the work; the
-  // capability is the provider's ceiling and the backend method together.
-  function canExportEmlFor(id) {
-    if (!backendCanExportEml) return false
-    var host = (id === undefined || id === "") ? current : hostForId(id)
-    if (!host) host = current
-    return !!host && host.canExportEml
-  }
-  // The mailbox that owns a message id. A merged id carries its owner; a bare
-  // native id belongs to the mailbox on screen. The message menu captures this
-  // when it opens, so a later account switch cannot re-route the action.
-  function accountForMessage(id) {
-    var host = hostForId(id)
-    return host ? String(host.accountId || "") : ""
-  }
-  // The dispatch boundary every export entry point goes through. `accountId`
-  // and `id` are the owning mailbox and that mailbox's own name for the
-  // message, captured by a caller that must keep them across an account
-  // switch. A non-unified view refuses when the captured mailbox is no longer
-  // the one on screen: 42:INBOX is a different message in the next account.
-  function exportEmlFor(accountId, id) {
-    var target = String(id || "")
-    if (target === "") return false
-    if (!backendCanExportEml) {
-      fail("Saving .eml needs a newer Omamail backend")
-      return false
-    }
-    var owner = String(accountId || "") === "" ? current : findAccount(String(accountId))
-    if (!owner) {
-      fail("That mailbox is no longer set up, so nothing was saved")
-      return false
-    }
-    if (!unified && owner !== current) {
-      fail("That message is no longer on screen, so nothing was saved")
-      return false
-    }
-    if (!owner.ready) {
-      owner.fail("Sign in before saving a message as .eml")
-      return false
-    }
-    if (!owner.canExportEml) {
-      owner.fail("This mailbox cannot save messages as .eml")
-      return false
-    }
-    return owner.exportEml(target)
-  }
-  function exportEml(id) {
-    if (!canExportEmlFor(id)) {
-      fail("This mailbox cannot save messages as .eml")
-      return false
-    }
-    var host = hostForId(id)
-    if (!host) host = current
-    if (!host) return false
-    return exportEmlFor(host.accountId, sourceIdFor(id))
-  }
-  // Save as .eml from the keyboard: the reader's open message, else the list's
-  // cursor row. Resolved here so App.qml stays a one-line case like the rest.
-  function exportFromView(view, cursorId) {
-    var id = view === "reader" && selectedId !== "" ? selectedId : cursorId
-    return String(id || "") === "" ? false : exportEml(id)
-  }
-  function markAllRead() {
-    if (!unified) {
-      if (current) current.markAllRead()
-      return
-    }
-    eachHost(function(host) { host.markAllRead() })
-  }
-  // Several ticked rows at once. A merged list draws rows from several
-  // mailboxes, and a batch is one mailbox's request, so it is refused there
-  // the way a move is: the rule every unavailable action follows.
-  function actMany(ids, action) {
-    if (unified) {
-      fail("Acting on several messages needs one mailbox on screen")
-      return false
-    }
-    return current ? current.actMany(ids, action) : false
-  }
+  function refuseUnavailableAction(action, id) { return MessageActions.refuseUnavailableAction(root, action, id) }
+  function act(id, action, quiet, memberOnly) { return MessageActions.act(root, id, action, quiet, memberOnly) }
+  function toggleStar(id) { return MessageActions.toggleStar(root, id) }
+  function canExportEmlFor(id) { return MessageActions.canExportEmlFor(root, id) }
+  function accountForMessage(id) { return MessageActions.accountForMessage(root, id) }
+  function exportEmlFor(accountId, id) { return MessageActions.exportEmlFor(root, accountId, id) }
+  function exportEml(id) { return MessageActions.exportEml(root, id) }
+  function exportFromView(view, cursorId) { return MessageActions.exportFromView(root, view, cursorId) }
+  function markAllRead() { return MessageActions.markAllRead(root) }
+  function actMany(ids, action) { return MessageActions.actMany(root, ids, action) }
   // The mailbox the From address belongs to, which compose already names:
   // `sendIdentities` spans every account and carries the id, so a unified
   // view needed the routing rather than a new question.
@@ -2298,16 +2249,23 @@ Item {
       "send-" + sendSession + "-" + sendSequence, sendSequence)
   }
 
-  // The mailbox a submission is sent from.
-  //
-  // A named one is the answer, and a named one that is not here is a refusal
-  // rather than permission to guess: falling through to matching the address
-  // sent the message from whichever mailbox matched first, which for two that
-  // share a send-as alias is not the one the composer chose. The address is
-  // only consulted when nothing named a mailbox at all.
-  //
-  // Resolved in one place so the choice can be asserted, rather than inferred
-  // from what happened after it.
+  function sendAgentProposal(proposalId, fields) {
+    var id = String(proposalId || "")
+    if (!/^[a-f0-9]{32}-[0-9]+$/.test(id)) return false
+    var host = sendHostFor(fields)
+    if (!host) return false
+    sendSequence += 1
+    // The durable outbox owns idempotency across panels and application restarts.
+    var outgoing = Object.assign({}, fields, {exactBody: true})
+    return host.send(outgoing, "agent-" + id, sendSequence)
+  }
+  function agentProposalQueue(accountId) {
+    var host = findAccount(String(accountId || ""))
+    return host ? host.sendQueue : null
+  }
+
+  // An explicit mailbox must exist; never fall back to a shared send-as alias.
+  // Resolve by address only when the submission has no mailbox identity.
   function sendHostFor(fields) {
     var values = fields || ({})
     var target = draftOwner(values)
@@ -2324,13 +2282,8 @@ Item {
     return Unified.accountOf(String(values.draftId || ""))
   }
 
-  // The same submission with its draft id as the owning provider issued it.
-  //
-  // Asked of the id rather than of `unified`, because the composer can be
-  // opened from a merged list and saved after the reader has left it — and a
-  // provider handed a composed id answers that the draft is no longer there
-  // and writes nothing. A bare id cannot hold the separator, so this is safe
-  // to ask of any of them.
+  // Decode a merged draft id even after the reader leaves the merged list.
+  // Provider-local ids cannot contain the separator.
   function withSourceDraftId(values) {
     var id = String(values.draftId || "")
     if (Unified.accountOf(id) === "") return values
@@ -2635,6 +2588,19 @@ Item {
     Component.onCompleted: Qt.callLater(root.refreshCalendarPreview)
   }
 
+  Loader {
+    id: calendarReminderLoader
+    active: root.backendCanGoogleCalendars && root.calendarRemindersEnabled
+    sourceComponent: Component {
+      CalendarReminders {
+        service: root
+        pluginDir: root.pluginDir
+        notificationForeground: Color.foreground
+        notificationAccent: Color.accent
+      }
+    }
+  }
+
   Timer {
     interval: 600000
     repeat: true
@@ -2725,23 +2691,6 @@ Item {
     onLoadFailed: root.applyWindowPrefs("")
   }
 
-  // Availability probe: loads Sonnet once so the settings page can explain a
-  // missing module or dictionary without a compose window open. Its language
-  // follows the setting so the status is about the *requested* dictionary, not
-  // a default-English fallback.
-  Loader {
-    id: spellingProbe
-    active: true
-    source: "compose/SpellcheckAdapter.qml"
-  }
-
-  Binding {
-    target: spellingProbe.item
-    property: "language"
-    value: root.spellingLanguage
-    when: spellingProbe.item !== null
-  }
-
   Timer {
     id: windowPrefsSettling
     interval: 500
@@ -2824,6 +2773,9 @@ Item {
         objectName: "agent-runner"
         backend: agentRunnerLoader.backend
         pluginDir: root.pluginDir
+        selectedAgent: root.aiAgent
+        selectedModel: root.aiModel
+        selectionResetAt: Number(root.settings ? root.settings.aiChatResetAt || 0 : 0)
         // The open account owns what the rows show and cancel: an IMAP id is
         // only unique inside one account, and two accounts can share an address.
         accountId: root.current ? root.current.accountId : ""
@@ -2919,6 +2871,23 @@ Item {
     stderr: StdioCollector { waitForEnd: true }
   }
 
+  Process {
+    id: defaultMailClientProcess
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      if (root.defaultMailClientBusy) {
+        root.defaultMailClientBusy = false
+        if (exitCode !== 0) root.defaultMailClientError =
+          String(stderr.text || "").trim() || "Could not change the default mail client"
+        // The status read cannot start from inside this process's own exit.
+        Qt.callLater(root.refreshDefaultMailClient)
+        return
+      }
+      if (exitCode === 0) root.defaultMailClient = String(stdout.text || "").trim()
+    }
+  }
+
   Component.onCompleted: {
     barBridge = BarBridge.publish(function() {
       return {
@@ -2927,12 +2896,13 @@ Item {
         barTooltip: root.barTooltip, contentDirection: root.contentDirection,
         barMessages: root.barMessages, barEvents: root.barEvents
       }
-    }, function(values) { root.applySettings(BarBridge.settings(values, root.defaultSettingValues)) },
+    }, function(values) { root.applySettings(BarBridge.settings(values, Settings.DEFAULTS)) },
       function() { root.refresh() },
       function() { root.refreshCalendarPreview() })
     Qt.callLater(root.restoreAccountRegistry)
     Qt.callLater(root.refreshRecipientContacts)
     Qt.callLater(root.registerMailtoHandler)
+    Qt.callLater(root.refreshDefaultMailClient)
   }
 
   property var barBridge: null

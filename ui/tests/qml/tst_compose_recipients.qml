@@ -29,9 +29,11 @@ Item {
     property var sendIdentities: []
     property string accountEmail: "me@example.com"
     property string activeAccountId: "me@example.com"
+    property string composeAccountId: "me@example.com"
     property string switchedTo: ""
 
     function preferredSendAs(_recipients) { return null }
+    function accountEmailFor(id) { return id === composeAccountId ? accountEmail : "" }
     function switchTo(id) {
       switchedTo = String(id || "")
       activeAccountId = switchedTo
@@ -55,6 +57,7 @@ Item {
     anchors.fill: parent
     service: mailService
     textColor: Qt.rgba(1, 1, 1, 1)
+    errorColor: Qt.rgba(1, 1, 1, 1)
     backgroundColor: Qt.rgba(0.06, 0.06, 0.06, 1)
     accentColor: Qt.rgba(1, 0.5, 0, 1)
     dimColor: Qt.rgba(0.67, 0.67, 0.67, 1)
@@ -294,4 +297,3 @@ Item {
     }
   }
 }
-

@@ -13,7 +13,7 @@
 // follows it — a context that is not text entry parks the focus rather than
 // leaving it wherever the last click put it. Keeping those two as separate
 // things is what let a dismissed compose field go on eating j and k.
-var CONTEXTS = ["list", "reader", "search", "compose", "page", "calendar", "assistant", "assistantCommands"]
+var CONTEXTS = ["list", "reader", "search", "compose", "eventCompose", "eventGuests", "page", "calendar", "assistant", "assistantCommands"]
 
 // Shorthands, so a row says where it lives rather than restating the set.
 var MAIL = ["list", "reader"]
@@ -77,10 +77,7 @@ var BINDINGS = [
     hint: { list: "trash", reader: "trash" } },
   { id: "star", keys: ["s"], contexts: MAIL,
     group: "Acting", label: "Star or unstar" },
-  // Saving the message out as a file. It acts on one message like the other
-  // mail verbs, but it writes to the user's disk rather than to the mailbox,
-  // so it takes the modified key Thunderbird and Gmail put "Save as" on
-  // instead of a bare letter beside archive.
+  // Save the original message bytes to Downloads.
   { id: "exportEml", keys: ["Ctrl+Shift+S"], contexts: MAIL,
     group: "Acting", label: "Save as .eml" },
   // `v` because that is the key Gmail moves a message with, and issue #58 asks
@@ -135,12 +132,28 @@ var BINDINGS = [
     group: "Calendar", label: "Go to today" },
   { id: "calendarWeek", keys: ["w"], contexts: ["calendar"],
     group: "Calendar", label: "Show week view" },
+  { id: "calendarDay", keys: ["d"], contexts: ["calendar"],
+    group: "Calendar", label: "Show day view" },
+  { id: "calendarAgenda", keys: ["a"], contexts: ["calendar"],
+    group: "Calendar", label: "Show agenda view" },
+  { id: "calendarUndo", keys: ["u"], contexts: ["calendar"],
+    group: "Calendar", label: "Undo the last event change", hint: { calendar: "undo" } },
   { id: "calendarMonth", keys: ["m"], contexts: ["calendar"],
     group: "Calendar", label: "Show month view" },
   // Both Enters: the main keyboard's is Return, the numpad's is Enter, and
   // a hand on the numpad expects the same thing of them.
+  { id: "spellingSuggestions", keys: ["Ctrl+."], contexts: ["compose"],
+    group: "Writing", label: "Spelling suggestions..." },
   { id: "send", keys: ["Ctrl+Return", "Ctrl+Enter"], contexts: ["compose"],
     group: "Writing", label: "Send", hint: { compose: "send" } },
+  { id: "saveEvent", keys: ["Return", "Enter", "Ctrl+Return", "Ctrl+Enter"], contexts: ["eventCompose"],
+    group: "Writing", label: "Save and close the event", hint: { eventCompose: "save" } },
+  { id: "guestNext", keys: ["Down"], contexts: ["eventGuests"],
+    group: "Writing", label: "Next guest suggestion" },
+  { id: "guestPrevious", keys: ["Up"], contexts: ["eventGuests"],
+    group: "Writing", label: "Previous guest suggestion" },
+  { id: "guestChoose", keys: ["Return", "Enter"], contexts: ["eventGuests"],
+    group: "Writing", label: "Choose guest suggestion" },
   { id: "undoSend", keys: ["Alt+Z"], contexts: ANY,
     survivesOverlay: true,
     group: "Writing", label: "Undo send" },
@@ -189,12 +202,10 @@ var BINDINGS = [
   { id: "assistantSend", keys: ["Return", "Enter", "Ctrl+Return", "Ctrl+Enter"], contexts: ["assistant", "assistantCommands"],
     sequenceContexts: { "Return": ["assistant"], "Enter": ["assistant"] },
     group: "AI", label: "Send the AI message" },
-  { id: "assistantCommandUp", keys: ["Up"], contexts: ["assistantCommands"],
-    group: "AI", label: "Previous AI command" },
-  { id: "assistantCommandDown", keys: ["Down"], contexts: ["assistantCommands"],
-    group: "AI", label: "Next AI command" },
+  { id: "assistantCommandNext", keys: ["Down"], contexts: ["assistantCommands"], group: "AI", label: "Next command" },
+  { id: "assistantCommandPrevious", keys: ["Up"], contexts: ["assistantCommands"], group: "AI", label: "Previous command" },
   { id: "assistantChooseCommand", keys: ["Return", "Enter"], contexts: ["assistantCommands"],
-    group: "AI", label: "Fill the selected AI command" },
+    group: "AI", label: "Complete or run the selected AI command" },
 
   { id: "calendar", keys: ["Alt+C"], contexts: ["list", "reader", "calendar"],
     group: "Going", label: "Switch between mail and calendar" },
@@ -226,7 +237,7 @@ var BINDINGS = [
   { id: "back", keys: ["Escape"], contexts: ANY,
     survivesOverlay: true,
     group: "Mailbox", label: "Back, or close the window",
-    hint: { reader: "back", page: "back", compose: "close", search: "leave" } }
+    hint: { reader: "back", page: "back", compose: "close", eventCompose: "close", search: "leave" } }
 ]
 
 // A pending send is a transient action over the screen, not a screen of its
@@ -236,6 +247,7 @@ function contextFor(state) {
   var value = state || ({})
   if (value.assistantEditing) return value.assistantCommands ? "assistantCommands" : "assistant"
   if (value.showPage) return "page"
+  if (value.eventComposing) return value.guestSuggestions ? "eventGuests" : "eventCompose"
   if (value.composing) return "compose"
   if (value.searchFocused) return "search"
   if (value.calendarVisible) return "calendar"
