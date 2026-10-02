@@ -1,4 +1,4 @@
-> **Public development copy of [Omamail](https://github.com/huacnlee/omamail), maintained by Chris Gray.** It adds spellchecking in the message composer and saving a message as an `.eml` file; both are merged on `main`. The installation instructions below install upstream Omamail; this copy has no published release.
+> **Public development copy of [Omamail](https://github.com/huacnlee/omamail), maintained by Chris Gray.** Based on upstream v0.10.8, it adds composer spellchecking, Save as `.eml`, and calendar times that follow the system's 12/24-hour setting. The same three changes are offered upstream as [#323](https://github.com/huacnlee/omamail/pull/323), [#324](https://github.com/huacnlee/omamail/pull/324), and [#325](https://github.com/huacnlee/omamail/pull/325). The installation instructions below install upstream Omamail; this copy has no published release.
 
 # Omamail
 
@@ -42,6 +42,12 @@ irm https://huacnlee.github.io/omamail/install.ps1 | iex
 
 Each installer verifies the release package before replacing an existing version. The macOS app and Windows executable are unsigned. The macOS installer removes quarantine only after verifying the downloaded archive. See [standalone runtime and release details](docs/BACKEND-RUNTIME.md#standalone-bundled-backend) for package layout, platform integration, installer behavior, and security checks.
 
+### Optional spelling support
+
+Composer body spellchecking uses KDE Sonnet and a local Hunspell dictionary. On Arch, install `sonnet` and `hunspell-en_us`. On Debian and Ubuntu releases that provide Qt 6 Sonnet, install `qml6-module-org-kde-sonnet`, `sonnet6-plugins`, and `hunspell-en-us`. Restart Omamail after installing a dictionary.
+
+Spelling checks default to US English and can be turned off in Settings. Without the Sonnet QML module or the selected dictionary, composing remains available and Settings explains what is missing. Omamail does not install system packages. Personal words are saved in Omamail's own `spelling.json`; Add to dictionary does not change a global Hunspell dictionary.
+
 ## Run from source
 
 Install Rust, CMake 3.21 or newer, and Qt 6.5 or newer, then use the repository Make targets:
@@ -50,14 +56,14 @@ Install Rust, CMake 3.21 or newer, and Qt 6.5 or newer, then use the repository 
 make app-run
 ```
 
-`make app-run` builds the standalone backend without the AI feature, builds the Qt host, and launches it from the source resources. See [Contributing](CONTRIBUTING.md) for validation commands.
+`make app-run` builds the standalone backend and Qt host, then launches from the source resources. Current source builds enable AI assistance on Linux and macOS with an installed Claude, Codex or OpenCode CLI; choose the agent in Settings. Windows AI support remains deferred. See [Contributing](CONTRIBUTING.md) for validation commands.
 
 ## Features
 
 - **Multiple mailboxes:** Gmail, Outlook, HEY, JMAP and IMAP/SMTP, including Fastmail, iCloud and self-hosted servers.
 - **Mail and calendar:** read, search, compose, manage attachments and respond to meeting invitations. Available actions depend on your provider.
 - **Keyboard navigation:** `j`/`k` to move, `r` to reply, `c` to compose, `/` to search and `?` for all shortcuts.
-- **AI assistance in Omarchy:** ask about selected messages and review suggested drafts using your Omarchy AI setup. See [AI assistance](docs/AGENT.md).
+- **AI assistance in Omarchy:** ask about selected messages and review suggested drafts with Claude, OpenCode V2 or Codex. Follow your Omarchy default, or select an agent and optional model in Settings. An unsupported system default disables the AI action with a setup explanation. Conversations retain follow-ups and draft proposals; `/clear`, `/history` and `/diagnose` manage the chat.
 - **Desktop integration:** native notifications and a compact layout for smaller windows; the Omarchy plugin also provides the bar widget and `mailto:` integration.
 - **Privacy controls:** credentials stored in the system keyring and remote images blocked until you choose to load them.
 
@@ -69,9 +75,15 @@ Choose a provider in Settings. Gmail needs a Google OAuth client; Outlook needs 
 
 See [mailbox setup](docs/MAILBOXES.md) for provider instructions and limitations, including Microsoft 365 and Proton Mail Bridge.
 
+## Make Omamail the default mail client
+
+Omarchy opens HEY's web app on `SUPER+SHIFT+E`. Choose **Settings → Default mail client → Set as default** to make Omamail open `mailto:` links, `SUPER+SHIFT+E`, and `SUPER+SHIFT+ALT+E` for a new message.
+
+The key bindings go in a clearly marked block in `~/.config/hypr/bindings.lua`; Omarchy's own files are never changed. **Undo** removes the block and leaves the file as it was.
+
 ## Open the Omarchy plugin from the keyboard
 
-Add this to `~/.config/hypr/bindings.lua`:
+To use another key, add this to `~/.config/hypr/bindings.lua`:
 
 ```lua
 o.bind("SUPER + SHIFT + G", "Omamail", "omarchy shell shell toggle omamail '{}'")

@@ -9,6 +9,8 @@ import "../message/Direction.js" as Direction
 import "../message/Message.js" as Mail
 import "../compose/Recipients.js" as Recipients
 import "../compose/Senders.js" as Senders
+import "../compose/Spelling.js" as Spelling
+import "../agent/Agent.js" as Agent
 
 // Composing takes over the whole content area of the one window rather than
 // opening a second one: Omarchy's panel mechanism would give an extra window
@@ -38,19 +40,14 @@ DropArea {
   property bool opened: false
   property bool userModified: false
   property bool settingBodyText: false
-  // Spelling settings: read from the service, applied to the adapter.
-  // The service owns the values and persistence; the composer only applies
-  // them. Missing support is reported via spellingStatus.
   // The spelling settings live on the service; the composer follows them when
-  // one is wired, and falls back to the defaults for the tests and previews
+  // one is wired, and falls back to the defaults for the tests
   // that instantiate it bare. A caller may still assign over the binding.
-  property bool spellingEnabled: service && service.spellingEnabled !== undefined
-    ? service.spellingEnabled : true
-  property string spellingLanguage: service && service.spellingLanguage !== undefined
-    ? String(service.spellingLanguage) : "en_US"
+  property bool spellingEnabled: Spelling.decodeSettings(service ? { spellingEnabled: service.spellingEnabled } : null).enabled
+  property string spellingLanguage: Spelling.decodeSettings(service ? { spellingLanguage: service.spellingLanguage } : null).language
   property var spellingPersonalWords: service ? service.spellingPersonalWords : []
   // Bumped on every body change so a menu opened before an edit can tell that
-  // the text under its saved position moved (finding 5).
+  // the text under its saved position moved.
   property int bodyRevision: 0
   // Body checking is on only when the optional Sonnet adapter loaded and
   // reports a dictionary for the requested language.
@@ -61,20 +58,26 @@ DropArea {
     : (spellcheckLoader.item ? spellcheckLoader.item.status
                              : (spellingEnabled ? "loading" : "disabled"))
   // The live adapter, or null before it loads / when disabled. Tests and the
-  // preview drive spelling through this rather than reaching into the loader.
+  // fixtures drive spelling through this rather than reaching into the loader.
   readonly property var spellingAdapter: spellcheckLoader.item
   // Finished misspelled words as {start, end} UTF-16 offsets into the body text.
   property var spellingRanges: []
+  property int spellingLayoutRevision: 0
   // Reads the layout inputs that positionToRectangle() consumes in C++, where
   // the binding engine cannot see them. The underline bindings read this so a
-  // resize, wrap or font change re-measures their geometry (finding 9).
+  // resize, wrap or font change re-measures their geometry. The deferred revision
+  // re-measures after Qt relayouts, since alignment changes notify before that.
   readonly property string spellingLayoutKey:
     bodyEdit.width + ":" + bodyEdit.wrapMode + ":" + bodyEdit.font.pixelSize
-      + ":" + bodyEdit.font.family
+      + ":" + bodyEdit.font.family + ":" + bodyEdit.horizontalAlignment
+      + ":" + bodyEdit.effectiveHorizontalAlignment
+      + ":" + spellingLayoutRevision
   // The theme's error role, drawn under misspelled words. The composer draws
   // the underline itself because Sonnet's QML highlighter also colours the word
   // red; see ui/compose/SpellcheckAdapter.qml.
-  property color errorColor: textColor
+  required property color errorColor
+
+  signal keyPressed(var event)
 
   // A word is marked only once it is finished (something follows it), so this
   // only has to keep up with the document; the completeness rule is what defers
@@ -122,7 +125,7 @@ DropArea {
   // false when there is nothing to offer so the key falls through.
   function openSpellingAtCaret() {
     var adapter = spellingAdapter
-    if (!adapter || !spellingAvailable) return false
+    if (!bodyEdit.activeFocus || !spellingEnabled || !adapter || !spellingAvailable) return false
     var position = bodyEdit.cursorPosition
     var info = adapter.inspect(position)
     if (!info.misspelled) return false
@@ -205,8 +208,64 @@ DropArea {
   property string draftKey: newDraftKey()
   function newDraftKey() { return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2) }
   function currentFields() {
-    return ({ to: toField.text, subject: subjectField.text, body: bodyEdit.text,
-      from: fromEmail, accountId: accountId, draftId: sourceDraftId, draftKey: draftKey })
+    return ({ to: toField.text, cc: ccField.text, bcc: bccField.text,
+      subject: subjectField.text, body: Agent.replyOnly(bodyEdit.text, retainedReplyQuote()),
+      from: fromEmail, accountId: accountId, draftId: sourceDraftId, draftKey: draftKey, replyMessageId: replyMessageId,
+      envelope: outgoingEnvelope() })
+  }
+
+  property string agentParentJobId: ""
+  property string replyMessageId: ""
+  function retainedReplyQuote() {
+    if (mode !== "reply" && mode !== "replyAll") return ""
+    return Agent.replyOnly(bodyEdit.text, bodyQuote) !== bodyEdit.text ? bodyQuote : ""
+  }
+  function outgoingEnvelope() {
+    if (forwardAttachmentsLoading || forwardAttachmentError !== "" || attachmentHostPending || attachmentReadPending || attachJobs.length > 0) return null
+    return {accountId: accountId, draftKey: draftKey, from: fromEmail,
+      to: toField.text, cc: ccField.text, bcc: bccField.text, replyTo: replyToField.text,
+      subject: subjectField.text, body: bodyEdit.text,
+      attachments: JSON.parse(JSON.stringify(allOutgoingAttachments())), draftId: sourceDraftId,
+      threadId: mode === "forward" ? "" : threadId, inReplyTo: mode === "forward" ? "" : inReplyTo,
+      replyMessageId: replyMessageId, replyQuote: retainedReplyQuote()}
+  }
+  function beginProposal(envelope, parentId) {
+    begin("new", null, "", [])
+    restoreDraft(Agent.proposalDraft(envelope, parentId, draftKey))
+  }
+  function applyProposal(envelope) {
+    if (!opened || String(envelope.accountId) !== accountId) return false
+    if (envelope.draftKey ? String(envelope.draftKey) !== draftKey
+        : !replyMessageId || String(envelope.replyMessageId || "") !== replyMessageId) return false
+    bodyQuote = String(envelope.replyQuote || "")
+    subjectField.text = String(envelope.subject)
+    replaceBody(envelope.body)
+    return true
+  }
+  function sendProposal(envelope, proposalId, parentId) {
+    if (!service || proposalRoutingChanged(envelope)) return false
+    // Prepare a real recovery draft before dispatch, without replacing newer
+    // manual edits. Undo and failures use the same parked-draft path as Send.
+    var draft = Agent.proposalDraft(envelope, parentId, String(envelope.draftKey || newDraftKey()))
+    var accepted = service.sendAgentProposal(proposalId, fieldsForDraft(draft))
+    if (!accepted) return false
+    parkDraftForSend(String(accepted), draft)
+    return accepted
+  }
+
+  function proposalRoutingChanged(envelope) {
+    if (!opened || !envelope) return false
+    // An unrelated parked draft does not own a reader's proposal. A matching
+    // draft/reply does: never send its old routing after the owner edits it.
+    var sameDraft = envelope.draftKey ? String(envelope.draftKey) === draftKey
+      : replyMessageId !== "" && String(envelope.replyMessageId || "") === replyMessageId
+    if (!sameDraft) return false
+    return String(envelope.accountId || "") !== accountId
+      || String(envelope.from || "") !== fromEmail
+      || String(envelope.to || "") !== toField.text
+      || String(envelope.cc || "") !== ccField.text
+      || String(envelope.bcc || "") !== bccField.text
+      || String(envelope.replyTo || "") !== replyToField.text
   }
 
   function replaceBody(text) {
@@ -311,6 +370,8 @@ DropArea {
   }
 
   function clearCurrentDraft(forgetAttachments) {
+    agentParentJobId = ""
+    replyMessageId = ""
     composeTextSerial++
     pendingQuoteSummary = null
     pendingQuoteText = ""
@@ -406,12 +467,15 @@ DropArea {
   function snapshotDraft() {
     return ({
       draftKey: draftKey,
+      replyMessageId: replyMessageId,
+      agentParentJobId: agentParentJobId,
       to: toField.text,
       cc: ccField.text,
       bcc: bccField.text,
       replyTo: replyToField.text,
       subject: subjectField.text,
       body: bodyEdit.text,
+      bodyQuote: bodyQuote,
       placedBody: placedBody,
       bodyWasEdited: bodyWasEdited,
       userModified: userModified,
@@ -435,6 +499,8 @@ DropArea {
   function restoreDraft(draft) {
     var saved = draft || ({})
     draftKey = String(saved.draftKey || newDraftKey())
+    replyMessageId = String(saved.replyMessageId || "")
+    agentParentJobId = String(saved.agentParentJobId || "")
     mode = String(saved.mode || "new")
     accountId = String(saved.accountId || "")
     sourceDraftId = String(saved.sourceDraftId || "")
@@ -458,6 +524,7 @@ DropArea {
     bccField.text = String(saved.bcc || "")
     replyToField.text = String(saved.replyTo || "")
     subjectField.text = String(saved.subject || "")
+    bodyQuote = typeof saved.bodyQuote === "string" ? saved.bodyQuote : ""
     setBodyText(String(saved.body || ""))
     placedBody = String(saved.placedBody || "")
     bodyWasEdited = saved.bodyWasEdited === true
@@ -551,24 +618,21 @@ DropArea {
     fromMenu.y = y
   }
 
-  // Everyone on the original except this mailbox: replying to yourself is
-  // never what reply-all was for.
-  //
-  // "This mailbox" is the one the draft is written from, not the one on
-  // screen. Reading the active account's address dropped the wrong name: a
-  // reply owned by B, to a message addressed to both, kept B on the Cc and
-  // removed A — copying the sender and losing a real recipient.
-  function otherRecipients(summary) {
-    if (!summary) return ""
-    var mine = String(root.service
-      ? root.service.accountEmailFor(root.accountId) : "").toLowerCase()
-    var list = Array.isArray(summary.to) ? summary.to : []
-    var kept = []
-    for (var i = 0; i < list.length; i++) {
-      if (String(list[i].email || "").toLowerCase() === mine) continue
-      kept.push(list[i].email)
+  function ownReplyAddresses() {
+    if (!root.service) return []
+    var own = [{email: root.service.accountEmailFor(root.accountId)}]
+    var sources = Senders.asList(root.service.senderSources)
+    for (var i = 0; i < sources.length; i++) {
+      if (String(sources[i].id || "") !== root.accountId) continue
+      own.push({email: sources[i].email})
+      own = own.concat(Senders.asList(sources[i].aliases))
     }
-    return kept.join(", ")
+    var identities = Senders.asList(root.service.sendIdentities)
+    for (var j = 0; j < identities.length; j++) {
+      if (String(identities[j].accountId || "") === root.accountId)
+        own.push(identities[j])
+    }
+    return own
   }
 
   function updateRecipientSuggestions() {
@@ -648,6 +712,8 @@ DropArea {
 
   function begin(nextMode, summary, bodyText, attachments) {
     clearCurrentDraft(true)
+    agentParentJobId = ""
+    replyMessageId = summary && (nextMode === "reply" || nextMode === "replyAll") ? String(summary.id || "") : ""
     mode = String(nextMode || "new")
     // The mailbox the message being answered arrived in, not the one that
     // happens to be active. In a merged list those differ, and a reply sent
@@ -659,8 +725,6 @@ DropArea {
     var quoted = ""
 
     if (summary && mode !== "new") {
-      var replyTo = summary.replyTo && summary.replyTo.email
-        ? summary.replyTo.email : summary.from.email
       threadId = summary.threadId
       inReplyTo = summary.messageId
       // Cc as well as To: an alias is just as often the address a thread
@@ -676,12 +740,12 @@ DropArea {
         originalAttachments = Array.isArray(attachments) ? attachments.slice() : []
         if (originalAttachments.length > 0) loadForwardAttachments()
       } else {
-        toField.text = replyTo
+        var recipients = Recipients.replyFields(summary, mode, ownReplyAddresses())
+        toField.text = recipients.to
+        ccField.text = recipients.cc
+        ccVisible = ccField.text !== ""
+        if (recipients.outgoing) replyRecipients = [summary.from]
         subjectField.text = String(summary.subject || "")
-        if (mode === "replyAll") {
-          ccField.text = otherRecipients(summary)
-          ccVisible = ccField.text !== ""
-        }
       }
       pendingQuoteSummary = summary
       pendingQuoteText = String(bodyText || "")
@@ -860,9 +924,7 @@ DropArea {
   }
 
   function parkForSend(sendId) {
-    var parked = parkedDrafts.slice()
-    parked.push({ sendId: String(sendId || ""), draft: snapshotDraft() })
-    parkedDrafts = parked
+    parkDraftForSend(sendId, snapshotDraft())
     clearCurrentDraft(false)
     opened = false
     if (interruptedDraft) {
@@ -872,6 +934,16 @@ DropArea {
     } else {
       sendQueued()
     }
+  }
+
+  function parkDraftForSend(sendId, draft) {
+    var parked = parkedDrafts.slice()
+    // A card can appear in both the reader and composer. The outbox send ID
+    // also identifies its one recovery draft.
+    if (parked.some(function(entry) { return entry.sendId === String(sendId) })) return
+    parked.push({ sendId: String(sendId || ""), draft: draft })
+    parkedDrafts = parked
+    draftChanged()
   }
 
   // The parked draft a send names — or, for a caller that does not name its
@@ -1930,6 +2002,7 @@ DropArea {
       wrapMode: TextEdit.Wrap
       textFormat: TextEdit.PlainText
       horizontalAlignment: root.composeAlignment
+      onEffectiveHorizontalAlignmentChanged: Qt.callLater(function() { root.spellingLayoutRevision += 1 })
       color: root.textColor
       selectionColor: Style.selectionFillFor(root.textColor, root.accentColor)
       selectedTextColor: root.textColor
@@ -1951,11 +2024,8 @@ DropArea {
       }
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(event) {
-        if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_Period) {
-          if (root.openSpellingAtCaret()) event.accepted = true
-          return
-        }
-        root.pasteKey(event)
+        root.keyPressed(event)
+        if (!event.accepted) root.pasteKey(event)
       }
 
       // The spelling underline is drawn here, not by Sonnet, so the word is not
@@ -1966,31 +2036,29 @@ DropArea {
         anchors.fill: parent
         Repeater {
           model: root.spellingRanges
-          delegate: Rectangle {
+          delegate: Item {
             required property var modelData
-            objectName: "spelling-underline"
-            // positionToRectangle gives the caret at a position (width 1), so
-            // the right edge of the word is the caret one past its last
-            // character, not the last character's own rectangle.
-            //
-            // The layout key is named inside these bindings on purpose: the
-            // function reads width, wrap and font in C++, so without it a
-            // reflow would leave the underline where the word used to be.
-            readonly property rect fromRect: {
+            anchors.fill: parent
+            readonly property var segments: {
+              // Qt reads layout inputs internally; name them to refresh after
+              // a width or font change even when the ranges are unchanged.
               root.spellingLayoutKey
-              return bodyEdit.positionToRectangle(modelData.start)
+              return Spelling.underlineSegments(modelData.start, modelData.end,
+                function(position) { return bodyEdit.positionToRectangle(position) },
+                bodyEdit.leftPadding, bodyEdit.width - bodyEdit.rightPadding)
             }
-            readonly property rect toRect: {
-              root.spellingLayoutKey
-              return bodyEdit.positionToRectangle(modelData.end)
+            Repeater {
+              model: segments
+              delegate: Rectangle {
+                required property var modelData
+                objectName: "spelling-underline"
+                x: modelData.x
+                y: modelData.y
+                width: modelData.width
+                height: 1
+                color: root.errorColor
+              }
             }
-            x: fromRect.x
-            y: fromRect.y + fromRect.height - height
-            width: Math.max(2, fromRect.y === toRect.y
-              ? toRect.x - fromRect.x
-              : Math.max(fromRect.width, bodyEdit.width - fromRect.x))
-            height: 1
-            color: root.errorColor
           }
         }
       }
@@ -2015,7 +2083,7 @@ DropArea {
   }
 
   // The language is a binding, not a one-time assignment at load: a later
-  // Settings change must reach an already-open adapter (finding 6).
+  // Settings change must reach an already-open adapter.
   Binding {
     target: spellcheckLoader.item
     property: "language"

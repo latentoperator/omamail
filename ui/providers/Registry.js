@@ -30,6 +30,14 @@ function capabilities(values) {
   }
 }
 
+function calendarAttendanceMethod(id) {
+  return id === "gmail" ? "calendar.attendance" : ""
+}
+
+function calendarAttendanceUrl(id, accountId) {
+  return id === "gmail" ? "https://calendar.google.com/calendar/u/0/r?authuser=" + encodeURIComponent(String(accountId || "")) : ""
+}
+
 function mailbox(raw) {
   var entry = raw || {}
   var result = {

@@ -1,7 +1,9 @@
 QMLLINT := /usr/lib/qt6/bin/qmllint
 .DEFAULT_GOAL := test
 QML_FILES := ui/Service.qml ui/BarWidget.qml ui/App.qml ui/compose/RecoveryController.qml \
-	ui/compose/SpellcheckAdapter.qml ui/compose/PersonalWords.qml \
+	ui/compose/SpellcheckAdapter.qml ui/compose/PersonalWords.qml ui/compose/SpellingState.qml \
+	ui/tests/compatibility/tst_published_agent.qml \
+	ui/tests/qml/tst_export_routing.qml ui/tests/qml/tst_message_menu_export.qml \
 	ui/backend/Backend.qml ui/backend/Runtime.qml ui/diagnostics/Diagnostics.qml \
 	ui/components/BackendSetup.qml ui/components/OmamailLogo.qml \
 	ui/account/MailAccount.qml ui/account/BackendSync.qml ui/account/SendQueue.qml ui/account/Intents.qml ui/account/BatchAction.qml ui/account/Rsvp.qml ui/account/LabelActions.qml ui/account/Unsubscribe.qml ui/account/NewMailNotification.qml \
@@ -63,18 +65,19 @@ QML_FILES := ui/Service.qml ui/BarWidget.qml ui/App.qml ui/compose/RecoveryContr
 	ui/components/AccountRemovalDialog.qml \
 	ui/components/ComposeExitDialog.qml \
 	ui/components/BackBar.qml \
-	ui/components/SettingsPage.qml \
+	ui/components/SettingsPage.qml ui/components/AiSettings.qml \
 	ui/components/SettingsSidebar.qml \
 	ui/components/CalendarSettings.qml \
 	ui/components/CalendarEventComposer.qml \
-	ui/components/CalendarEventDetail.qml \
+	ui/components/CalendarEventDetail.qml ui/components/CalendarReminderPanel.qml \
 	ui/components/CalendarPalette.qml \
 	ui/components/ConfirmDeleteDialog.qml \
 	ui/components/SetupPage.qml \
 	ui/components/ShortcutHelp.qml \
-	ui/calendar/CalendarController.qml ui/calendar/CalendarCache.qml \
+	ui/calendar/CalendarController.qml ui/calendar/CalendarCache.qml ui/calendar/CalendarReminders.qml ui/calendar/CalendarReminderInbox.qml \
 	ui/components/CalendarView.qml \
 	ui/components/WeekCalendarView.qml \
+	ui/components/WindowMoveArea.qml \
 	ui/bar/BarPreview.qml
 APP_QML_FILES := app/qml/Main.qml app/qml/StandaloneShell.qml app/qml/StandaloneManifest.qml
 APP_BUILD_DIR ?= app/build
@@ -99,6 +102,7 @@ test-local: test test-backend-process
 
 test-backend-process:
 	cargo build --locked --target-dir "$(CURDIR)/target" --bin omamail
+	node ui/tests/test_backend_queue.js target/debug/omamail
 	python3 tests/test_backend_process.py
 	python3 tests/test_agent_native_bridge.py
 
@@ -116,14 +120,18 @@ test-js:
 	node app/tests/test_shell_theme.js
 	node ui/tests/test_bar_bridge.js
 	node ui/tests/test_backend_wire.js
+	node ui/tests/test_backend_queue.js
 	node ui/tests/test_backend_compatibility.js
 	node ui/tests/test_backend_runtime.js
 	node ui/tests/test_backend_chunks.js
 	node tests/test_imap_backend.js
 	node tests/test_hey_backend.js
 	node tests/test_gmail_backend.js
+	node ui/tests/test_settings.js
+	node ui/tests/test_spelling.js
 	node ui/tests/test_compose_recovery.js
 	node ui/tests/test_agent.js
+	node ui/tests/test_agent_options.js
 	node ui/tests/test_chat_text.js
 	node ui/tests/test_signature.js
 	node ui/tests/test_outbox.js
@@ -136,9 +144,11 @@ test-js:
 	node ui/tests/test_gmail_api.js
 	node ui/tests/test_message.js
 	node ui/tests/test_calendar.js
+	node ui/tests/test_calendar_time.js
 	node ui/tests/test_calendar_cache.js
 	node ui/tests/test_calendar_feed.js
 	node ui/tests/test_calendar_sources.js
+	node ui/tests/test_calendar_reminders.js
 	node ui/tests/test_calendar_palette.js
 	node ui/tests/test_bar_preview.js
 	node ui/tests/test_unsubscribe.js
@@ -159,6 +169,7 @@ test-js:
 	node ui/tests/test_aliases.js
 	node ui/tests/test_menu.js
 	node ui/tests/test_provider.js
+	node ui/tests/test_eml_export.js
 	node ui/tests/test_imap.js
 	node ui/tests/test_jmap.js
 	node ui/tests/test_jmap_threads.js
@@ -180,6 +191,7 @@ test-shell-portable:
 	sh tests/test_dev.sh
 	python3 tests/test_attachment_common.py
 	python3 tests/test_notification.py
+	python3 tests/test_calendar_notifications.py
 	python3 tests/test_curl_config.py
 	python3 tests/test_public_http.py
 	python3 tests/test_contacts.py
@@ -191,6 +203,7 @@ test-shell-portable:
 	bash tests/test_agent_job.sh
 	bash tests/test_link_plugin.sh
 	bash tests/test_mailto.sh
+	bash tests/test_default_mail.sh
 	bash tests/test_transport.sh
 	bash tests/test_jmap_transport.sh
 	python3 tests/test_jmap_stream.py
@@ -227,6 +240,12 @@ test-shell-libcurl:
 QMLTESTRUNNER := $(shell command -v qmltestrunner6 2>/dev/null \
 	|| ls /usr/lib/qt6/bin/qmltestrunner 2>/dev/null \
 	|| command -v qmltestrunner 2>/dev/null)
+
+# Use the verified release download, not a build from this checkout.
+.PHONY: test-agent-published
+test-agent-published:
+	@test -n "$(PUBLISHED_BACKEND)" || { echo "Set PUBLISHED_BACKEND to the verified pinned executable" >&2; exit 1; }
+	python3 tests/test_agent_published_qml.py --binary "$(PUBLISHED_BACKEND)" --runner "$(QMLTESTRUNNER)"
 
 test-qml:
 	@test -n "$(QMLTESTRUNNER)" || { \

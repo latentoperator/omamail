@@ -37,12 +37,22 @@ Item {
     }
   }
 
+  Omamail.KeyRouter {
+    id: keyRouter
+    context: "compose"
+    onTriggered: function(id, sequence) {
+      if (id === "spellingSuggestions") compose.openSpellingAtCaret()
+    }
+  }
+
   Omamail.ComposeView {
     id: compose
+    onKeyPressed: function(event) { keyRouter.routeKeyEvent(event) }
     anchors.fill: parent
     service: mailService
     spellingPersonalWords: mailService.spellingPersonalWords
     textColor: Qt.rgba(1, 1, 1, 1)
+    errorColor: Qt.rgba(1, 1, 1, 1)
     backgroundColor: Qt.rgba(0.06, 0.06, 0.06, 1)
     accentColor: Qt.rgba(1, 0.5, 0, 1)
     dimColor: Qt.rgba(0.67, 0.67, 0.67, 1)
@@ -72,6 +82,8 @@ Item {
       // Reset the layout and the requested language: an earlier case may have
       // narrowed the composer or pointed at a dictionary that is not here.
       compose.parent.width = 900
+      compose.contentDirection = ""
+      compose.spellingEnabled = true
       compose.spellingLanguage = "en_US"
     }
 
@@ -94,7 +106,7 @@ Item {
 
     function test_session_ignore_refreshes_a_separate_composer_document() {
       var body = named(compose, "compose-body-editor")
-      tryVerify(function() { return compose.spellingAvailable || compose.spellingStatus === "no-module" }, 3000)
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
       if (!compose.spellingAvailable) { skip("spelling unavailable (" + compose.spellingStatus + ")"); return }
       body.text = "the zqxjremotereviewhere here "
       tryCompare(compose, "spellingRanges", [{ start: 4, end: 24 }])
@@ -115,7 +127,7 @@ Item {
 
     function test_personal_words_preserve_focused_draft_selection_and_undo() {
       var body = named(compose, "compose-body-editor")
-      tryVerify(function() { return compose.spellingAvailable || compose.spellingStatus === "no-module" }, 3000)
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
       if (!compose.spellingAvailable) { skip("spelling unavailable (" + compose.spellingStatus + ")"); return }
       body.text = "the zqxjpersonalreviewhere here "
       body.forceActiveFocus()
@@ -242,7 +254,7 @@ Item {
     // switching back recovers, with no silent fallback to English.
     function test_language_follows_the_setting_and_reports_a_missing_dictionary() {
       tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
-      if (compose.spellingStatus === "no-module") { skip("Sonnet is not installed"); return }
+      if (!compose.spellingAvailable) { skip("spelling unavailable (" + compose.spellingStatus + ")"); return }
       compose.spellingLanguage = "en_US"
       tryVerify(function() { return compose.spellingStatus === "ready" }, 3000)
       compose.spellingLanguage = "zz_ZZ"
@@ -274,13 +286,50 @@ Item {
       var narrow = body.positionToRectangle(start)
       verify(narrow.x !== wide.x || narrow.y !== wide.y,
         "the narrower editor re-wraps the word")
+      underline = named(compose, "spelling-underline")
+      verify(underline, "the reflow rebuilt the underline")
       fuzzyCompare(underline.x, narrow.x, 1.0)
       fuzzyCompare(underline.y, narrow.y + narrow.height - underline.height, 1.0)
     }
 
+    function test_underline_follows_changed_content_alignment() {
+      var body = named(compose, "compose-body-editor")
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
+      if (!compose.spellingAvailable) { skip("spelling unavailable"); return }
+      body.text = "wrod "
+      tryVerify(function() { return named(compose, "spelling-underline") !== null })
+      var beforeX = body.positionToRectangle(0).x
+      compose.contentDirection = "Right to left"
+      wait(100)
+      var underline = named(compose, "spelling-underline")
+      verify(underline)
+      var at = body.positionToRectangle(0)
+      verify(at.x !== beforeX, "the content alignment moved the word")
+      fuzzyCompare(underline.x, at.x, 1.0)
+      compose.contentDirection = ""
+    }
+
+    function countUnderlines(item) {
+      var count = item.objectName === "spelling-underline" ? 1 : 0
+      var children = item.children || []
+      for (var i = 0; i < children.length; i++) count += countUnderlines(children[i])
+      return count
+    }
+
+    function test_underline_covers_a_word_split_across_lines() {
+      var body = named(compose, "compose-body-editor")
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
+      if (!compose.spellingAvailable) { skip("spelling unavailable"); return }
+      compose.parent.width = 300
+      body.text = "zqxjverylongmisspellingcontinuedacrossmultiplelineswithoutspaces "
+      tryCompare(compose, "spellingRanges", [{ start: 0, end: body.text.length - 1 }])
+      verify(body.positionToRectangle(0).y !== body.positionToRectangle(body.text.length - 1).y)
+      tryVerify(function() { return countUnderlines(body) > 1 })
+    }
+
     function test_disabling_unloads_the_adapter_and_re_enabling_restores_it() {
       tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
-      if (compose.spellingStatus === "no-module") { skip("Sonnet is not installed"); return }
+      if (!compose.spellingAvailable) { skip("spelling unavailable (" + compose.spellingStatus + ")"); return }
       compose.spellingEnabled = false
       tryVerify(function() { return compose.spellingAdapter === null }, 3000)
       compare(compose.spellingStatus, "disabled")
@@ -295,7 +344,7 @@ Item {
     function test_a_valid_to_valid_language_switch_rechecks_ranges() {
       var body = named(compose, "compose-body-editor")
       tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
-      if (compose.spellingStatus === "no-module") { skip("Sonnet is not installed"); return }
+      if (!compose.spellingAvailable) { skip("spelling unavailable (" + compose.spellingStatus + ")"); return }
 
       compose.spellingLanguage = "en_GB"
       tryVerify(function() {

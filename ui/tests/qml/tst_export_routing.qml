@@ -94,7 +94,10 @@ Item {
 
     function init() {
       service.applySettings({ unifiedMailboxes: false })
-      fixture = BackendFixture.markReady(service, 6)
+      fixture = BackendFixture.markReady(service, 7)
+      service.backendRuntime.requiredApiVersion = 6
+      service.backendRuntime.latestApiVersion = 7
+      service.backendRuntime.unreleasedMethods = ["mail.exportEml"]
       // Every dispatch completes, so no test inherits an in-flight flag from
       // another. A test that wants a specific filename or an error overrides
       // this answer or adds an error for the method.
@@ -104,7 +107,7 @@ Item {
       } }
       fixture.errors = ({})
       seed()
-      service.backend.protocolInfo = { apiVersion: 6, protocol: 1, version: "0.0.0",
+      service.backend.protocolInfo = { apiVersion: 7, protocol: 1, version: "0.0.0",
         methods: ["mail.exportEml"] }
       wait(0)
       exportBaseline = exportRequests().length
@@ -129,9 +132,10 @@ Item {
     // sent — the keyboard path used to dispatch because it asked the provider
     // rather than the advertised method list.
     function test_the_export_requires_the_advertised_method() {
-      service.backend.protocolInfo = { apiVersion: 5, protocol: 1, version: "0.0.0",
+      service.backend.protocolInfo = { apiVersion: 6, protocol: 1, version: "0.0.0",
         methods: ["mail.read"] }
       wait(0)
+      compare(service.backend.ready, true, "the released API 6 handshake remains ready")
       compare(service.canExportEmlFor("42:INBOX"), false,
         "the menu row is unavailable")
       compare(service.exportEml("42:INBOX"), false,
@@ -197,9 +201,25 @@ Item {
         "the busy state is visible at once")
       wait(0)
       compare(account.exportingEml, false)
-      verify(account.actionStatus.indexOf("Project update.eml") >= 0,
-        "the completion names the file")
+      compare(account.actionStatus, "Saved Project update.eml to /tmp/Downloads",
+        "the completion names the file, then its folder, each once")
       verify(account.lastError === "", "and it is not reported as a failure")
+    }
+
+    function test_a_successful_retry_clears_the_previous_failure() {
+      fixture.errors["mail.exportEml"] = { code: -32000, message: "mail_export_write_failed" }
+      var account = service.findAccount(ada)
+      compare(account.exportEml("42:INBOX"), true)
+      wait(0)
+      compare(account.lastError, "Could not write the .eml file to Downloads",
+        "a backend code is said in words")
+      fixture.errors = ({})
+      compare(account.exportEml("42:INBOX"), true)
+      compare(account.lastError, "", "the retry clears the prior failure")
+      wait(0)
+      compare(account.exportingEml, false)
+      verify(account.actionStatus.indexOf("Saved") === 0)
+      compare(account.lastError, "", "the old error must not return after success")
     }
 
     function test_a_failed_export_is_reported_safely() {

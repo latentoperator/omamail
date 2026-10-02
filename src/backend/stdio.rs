@@ -186,15 +186,14 @@ impl Write for Output {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::fd::AsRawFd;
 
     #[test]
     fn output_observer_waits_until_the_pipe_reader_closes() {
-        let mut descriptors = [-1; 2];
-        assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
-        // Own both descriptors immediately so assertions also close them.
-        let reader = unsafe { OwnedFd::from_raw_fd(descriptors[0]) };
-        let writer = unsafe { OwnedFd::from_raw_fd(descriptors[1]) };
+        // std's pipe is close-on-exec. A bare libc::pipe would let a child
+        // spawned by another test running in parallel inherit the read end
+        // and keep the pipe open after `reader` is dropped.
+        let (reader, writer) = std::io::pipe().unwrap();
         let mut output = output_descriptor(writer.as_raw_fd());
         assert_eq!(
             unsafe { libc::poll(&mut output, 1, 20) },

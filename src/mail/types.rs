@@ -415,6 +415,9 @@ impl TryFrom<&Value> for ExportRequest {
 /// Export needs an explicit account. An empty or unknown id is refused and
 /// never falls back to the registry's active account, unlike `resolve_account`.
 fn resolve_export_account(wanted: &str) -> Result<Account, &'static str> {
+    if wanted.len() > MAX_ID || wanted.chars().any(char::is_control) {
+        return Err("mail_account_unknown");
+    }
     let id = wanted.trim().to_lowercase();
     if id.is_empty() || id.len() > MAX_ID || id.chars().any(char::is_control) {
         return Err("mail_account_unknown");
