@@ -1,4 +1,5 @@
 use super::*;
+use crate::providers::imap::tests::synthetic_account;
 use std::sync::atomic::{AtomicUsize, Ordering};
 mod paging;
 
@@ -117,7 +118,7 @@ async fn large_account_scan_is_parallel_bounded_and_pages_reuse_snapshot() {
         }
     });
     let mut p = json!({"settings":{"imapHost":"127.0.0.1","imapPort":port,
-        "username":"synthetic","insecure":true,"testPlaintext":true},
+        "username":"synthetic","insecure":true,"testPlaintext":true,"testSession":synthetic_account()},
         "credential":"synthetic:secret","query":"search:ALL","limit":2,"requestToken":"large-account"});
     let mut rounds = 0;
     let first = loop {
@@ -325,7 +326,7 @@ async fn generic_all_server_lists_each_message_once_and_verifies_exclusions() {
         }
     });
     let mut p = json!({"settings":{"imapHost":"127.0.0.1","imapPort":port,
-        "username":"synthetic","insecure":true,"testPlaintext":true},
+        "username":"synthetic","insecure":true,"testPlaintext":true,"testSession":synthetic_account()},
         "credential":"synthetic:generic","query":"search:ALL","limit":10,"requestToken":"generic-all"});
     let mut method = "imap.list";
     let result = loop {
@@ -503,7 +504,7 @@ async fn cancelled_parallel_scan_closes_every_busy_socket() {
         }
     });
     let mut p = json!({"settings":{"imapHost":"127.0.0.1","imapPort":port,
-        "username":"synthetic","insecure":true,"testPlaintext":true},
+        "username":"synthetic","insecure":true,"testPlaintext":true,"testSession":synthetic_account()},
         "credential":"synthetic:secret","query":"search:ALL","requestToken":"cancel-parallel"});
     let boxes = parse_folders(
         b"* LIST () \"/\" A\r\n* LIST () \"/\" B\r\n* LIST () \"/\" C\r\n* LIST () \"/\" D\r\n",

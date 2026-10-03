@@ -1,4 +1,5 @@
 use super::*;
+use crate::providers::imap::tests::synthetic_account;
 #[test]
 fn octet_literals_do_not_create_responses_or_fetch_fields() {
     let raw = b"Subject: test\r\n\r\n* 8 FETCH (UID 999)\r\n\xc3\xa9";
@@ -74,7 +75,7 @@ async fn select(w: &mut Wire) {
     write(w, b"O1 OK selected\r\n").await.unwrap();
 }
 fn params(port: u16) -> Value {
-    json!({"settings":{"imapHost":"127.0.0.1","imapPort":port,"username":"synthetic","insecure":true,"testPlaintext":true},"credential":"synthetic:secret","oauth":false,"query":"folder:INBOX UNSEEN","limit":3,"progressive":true,"requestToken":"request-1"})
+    json!({"settings":{"imapHost":"127.0.0.1","imapPort":port,"username":"synthetic","insecure":true,"testPlaintext":true,"testSession":synthetic_account()},"credential":"synthetic:secret","oauth":false,"query":"folder:INBOX UNSEEN","limit":3,"progressive":true,"requestToken":"request-1"})
 }
 #[tokio::test]
 async fn sparse_search_orders_by_date_before_paging_even_when_progressive() {
@@ -259,4 +260,91 @@ async fn original_query_controls_are_rejected_before_connecting() {
             .await
             .is_err()
     );
+}
+
+/// Serve mailbox discovery, then refuse the SELECT. The refusal drops the
+/// authenticated wire instead of pooling it, which is the state the 45 second
+/// pool lifetime and the 60 second mailbox lifetime leave behind.
+async fn greeting_then_select_refusal(w: &mut Wire) {
+    greeting(w).await;
+    assert_eq!(line(w).await.unwrap(), b"O1 SELECT \"INBOX\"\r\n");
+    write(w, b"O1 NO synthetic refusal\r\n").await.unwrap();
+}
+
+#[tokio::test]
+async fn independent_mock_lifetimes_on_one_port_never_share_cached_mailboxes() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let first = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut w: Wire = BufReader::new(Box::new(stream));
+        greeting_then_select_refusal(&mut w).await;
+        drop(listener);
+    });
+    assert_eq!(
+        super::super::call("imap.list", &params(port)).await,
+        Err("imap_command_failed")
+    );
+    first.await.unwrap();
+
+    // The second mock lifetime is deliberately given the same port. It is a
+    // different synthetic account, so the mailbox list cached above belongs to
+    // someone else: this server must see the whole discovery handshake before
+    // its SELECT, never a reused mailbox list from the earlier server.
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let second = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut w: Wire = BufReader::new(Box::new(stream));
+        greeting_then_select_refusal(&mut w).await;
+    });
+    assert_eq!(
+        super::super::call("imap.list", &params(port)).await,
+        Err("imap_command_failed")
+    );
+    second.await.unwrap();
+}
+
+#[tokio::test]
+async fn one_synthetic_account_reuses_its_cached_mailboxes_on_a_fresh_connection() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let p = params(port);
+    let first = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut w: Wire = BufReader::new(Box::new(stream));
+        greeting_then_select_refusal(&mut w).await;
+        drop(listener);
+    });
+    assert_eq!(
+        super::super::call("imap.list", &p).await,
+        Err("imap_command_failed")
+    );
+    first.await.unwrap();
+
+    // The same account on the same port keeps reusing the mailbox list it has
+    // already discovered: a fresh connection runs LOGIN and the post-login
+    // CAPABILITY, then goes straight to SELECT with no second CAPABILITY or LIST.
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let second = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut w: Wire = BufReader::new(Box::new(stream));
+        write(&mut w, b"* OK ready\r\n").await.unwrap();
+        assert!(line(&mut w).await.unwrap().starts_with(b"O1 LOGIN"));
+        write(&mut w, b"O1 OK login\r\n").await.unwrap();
+        assert_eq!(line(&mut w).await.unwrap(), b"O1 CAPABILITY\r\n");
+        write(&mut w, b"* CAPABILITY IMAP4rev1\r\nO1 OK caps\r\n")
+            .await
+            .unwrap();
+        assert_eq!(line(&mut w).await.unwrap(), b"O1 SELECT \"INBOX\"\r\n");
+        write(&mut w, b"O1 NO synthetic refusal\r\n").await.unwrap();
+    });
+    assert_eq!(
+        super::super::call("imap.list", &p).await,
+        Err("imap_command_failed")
+    );
+    second.await.unwrap();
 }

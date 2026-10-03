@@ -135,8 +135,25 @@ async fn bridge_tls_refuses_buffered_plaintext_before_writing() {
     peer.read_to_end(&mut received).await.unwrap();
     assert!(received.is_empty());
 }
+/// A distinct synthetic account identity for every fixture build.
+///
+/// Every test in this binary shares one process, so `POOL` and `BOXES` are
+/// process-global and keyed by account — settings, credential and oauth, which
+/// includes the ephemeral loopback port. When two independent mock lifetimes
+/// are handed the same port inside the caches' 45-60 second lifetimes, an
+/// identical key lets the later mock skip the `CAPABILITY`+`LIST` discovery it
+/// expects and serve a mailbox list discovered from the earlier server. A
+/// build-scoped identity removes that overlap. Fixtures that deliberately reuse
+/// a connection build their parameters once and keep the same value.
+pub(super) fn synthetic_account() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    format!(
+        "synthetic-{}",
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}
 pub(super) fn params(port: u16) -> Value {
-    json!({"settings":{"imapHost":"127.0.0.1","imapPort":port,"username":"synthetic","insecure":true,"testPlaintext":true},"credential":"synthetic:password","folder":"INBOX","commands":["UID FETCH 1 (UID BODY.PEEK[])"]})
+    json!({"settings":{"imapHost":"127.0.0.1","imapPort":port,"username":"synthetic","insecure":true,"testPlaintext":true,"testSession":synthetic_account()},"credential":"synthetic:password","folder":"INBOX","commands":["UID FETCH 1 (UID BODY.PEEK[])"]})
 }
 #[tokio::test]
 async fn literal_bytes_cannot_forge_tagged_completion() {
@@ -523,7 +540,7 @@ fn outlook_settings_ignore_persisted_credential_destination_and_identity() {
 // ------------------------------------------------------------ raw export
 fn export_params(port: u16, uid: u64) -> Value {
     json!({
-        "settings": {"imapHost":"127.0.0.1","imapPort":port,"username":"synthetic","insecure":true,"testPlaintext":true},
+        "settings": {"imapHost":"127.0.0.1","imapPort":port,"username":"synthetic","insecure":true,"testPlaintext":true,"testSession":synthetic_account()},
         "credential": "synthetic:password",
         "folder": "INBOX",
         "uid": uid,
