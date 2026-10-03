@@ -470,7 +470,7 @@ pub(super) fn refresh(store: &Store, id: &str) -> Result<Value> {
 }
 struct HeadIndex {
     path: std::path::PathBuf,
-    revision: [u64; 6],
+    revision: [u64; 7],
     jobs: Vec<Value>,
 }
 static HEADS: std::sync::Mutex<Option<HeadIndex>> = std::sync::Mutex::new(None);
@@ -1276,6 +1276,67 @@ mod tests {
             .write_json(&head, "job.json", &json!({"id":"forged"}))
             .unwrap();
         assert!(refresh_page(&store, list(&store).unwrap()).is_err());
+    }
+    #[test]
+    fn head_index_sees_turns_created_within_one_root_timestamp_tick() {
+        struct Temp(std::path::PathBuf);
+        impl Drop for Temp {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let temp = Temp(std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "omamail-head-index-tick-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        std::fs::create_dir(&temp.0).unwrap();
+        let store = Store::open_at(&temp.0).unwrap();
+        let make = |id: &str, conversation: &str, order: u64, state: &str| {
+            store.create(id).unwrap();
+            let job = json!({"id":id,"conversationId":conversation,"accountId":"synthetic",
+                "subject":"Mail","messageId":"m","messageIds":["m"],"draftKey":"","draftFingerprint":"",
+                "kind":"message","state":state,"created":now(),"updated":now(),"createdOrder":order,"resultReady":false});
+            store.write_json(id, "job.json", &job).unwrap();
+            job
+        };
+        // The first poll caches an empty index, exactly like the contract
+        // fixture's paged-listing call before the harness seeds any turn.
+        assert!(list(&store).unwrap().is_empty());
+        let before = store.revision().unwrap();
+
+        // The fixture seeds turns with a direct mkdir. The cached key is rebuilt
+        // here from the live root metadata with the link count it observed
+        // before the turn existed, which is the window a same-tick mkdir leaves
+        // behind: coarse mtime/ctime unchanged, one more directory link.
+        let first = format!("{:032x}", 0);
+        make(&first, &first, 0, "done");
+        let mut stale = store.revision().unwrap();
+        *stale
+            .get_mut(6)
+            .expect("Store::revision must carry the root link count, not only timestamps") =
+            *before.last().unwrap();
+        HEADS.lock().unwrap().as_mut().unwrap().revision = stale;
+        assert_eq!(
+            list(&store).unwrap().len(),
+            1,
+            "a turn created after the index was cached must invalidate it"
+        );
+        assert_eq!(list(&store).unwrap()[0]["id"], first);
+
+        // Removal is the mirror signal.
+        let after_create = store.revision().unwrap();
+        store.remove(&first).unwrap();
+        let mut stale = store.revision().unwrap();
+        *stale.get_mut(6).unwrap() = *after_create.last().unwrap();
+        HEADS.lock().unwrap().as_mut().unwrap().revision = stale;
+        assert!(
+            list(&store).unwrap().is_empty(),
+            "a removed turn must invalidate the index that still listed it"
+        );
     }
     #[test]
     fn context_rejects_overrides_controls_and_injected_ids() {

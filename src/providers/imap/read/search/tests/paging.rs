@@ -1,4 +1,5 @@
 use super::*;
+use crate::providers::imap::tests::synthetic_account;
 use std::sync::Mutex;
 
 struct State {
@@ -55,7 +56,7 @@ impl Server {
             state,
             task,
             params: json!({"settings":{"imapHost":"127.0.0.1","imapPort":port,
-            "username":"synthetic","insecure":true,"testPlaintext":true},
+            "username":"synthetic","insecure":true,"testPlaintext":true,"testSession":synthetic_account()},
             "credential":"synthetic:secret","query":"search:ALL","limit":2,"requestToken":"paging"}),
         }
     }
