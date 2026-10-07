@@ -2429,6 +2429,8 @@ Item {
         panelFontFamily: root.fontFamily
       }
 
+      EmlSavedToast { app: root }
+
       // --------------------------------------------------------- status bar
 
       Item {
