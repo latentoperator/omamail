@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "../account/MessageActions.js" as MessageActions
 
@@ -16,9 +17,9 @@ Rectangle {
   // seven, because App.qml sits against the repository's file-size ceiling.
   required property var app
   readonly property var service: app ? app.service : null
-  readonly property color textColor: app ? app.foreground : Color.foreground
+  readonly property color textColor: app ? app.foreground : Commons.Color.foreground
   readonly property color dimColor: app ? app.dim : textColor
-  readonly property color accentColor: app ? app.accent : Color.accent
+  readonly property color accentColor: app ? app.accent : Commons.Color.accent
   readonly property color popupBackgroundColor: app ? app.popupBackground : Qt.rgba(0, 0, 0, 1)
   readonly property color popupBorderColor: app ? app.popupBorder : textColor
   readonly property string panelFontFamily: app ? app.fontFamily : Style.font.family
