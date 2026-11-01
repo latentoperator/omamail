@@ -398,6 +398,36 @@ Item {
       compare(configPlatform.confirm(0, true, ""), true)
     }
 
+    // An existing file that cannot be read must never be replaced: the store
+    // stays unloaded, keeps new words in memory only, and says why. A missing
+    // file (FileNotFound, 2) is the one failure that means "start empty".
+    function test_spelling_personal_words_never_overwrite_an_unreadable_file() {
+      var store = mailService.spellingWordStore
+      store.apply("")
+      configPlatform.writes = []
+      configPlatform.callbacks = []
+      store.loaded = false
+      store.pending = false
+      store.error = ""
+      store.readFailed(3)
+      compare(store.loaded, false)
+      verify(mailService.spellingPersonalWordsError !== "")
+      mailService.addPersonalWord("sessiononly")
+      verify(mailService.spellingPersonalWords.indexOf("sessiononly") >= 0)
+      compare(configPlatform.writes.length, 0, "an unreadable dictionary is never overwritten")
+
+      store.apply("")
+      configPlatform.writes = []
+      store.loaded = false
+      store.pending = false
+      store.error = ""
+      store.readFailed(2)
+      compare(store.loaded, true, "a missing file starts an empty list")
+      mailService.addPersonalWord("firstword")
+      compare(configPlatform.writes.length, 1)
+      compare(configPlatform.confirm(0, true, ""), true)
+    }
+
     // The probe loads Sonnet through the same adapter the composer uses; it
     // settles into one concrete status on any machine rather than hanging.
     function test_spelling_availability_settles_to_a_known_status() {
