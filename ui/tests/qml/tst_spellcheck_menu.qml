@@ -24,6 +24,8 @@ Item {
     ]
     property string accountEmail: "me@example.com"
     property string activeAccountId: "me@example.com"
+    // Spelling is opt-in; these cases exercise it turned on.
+    property bool spellingEnabled: true
     property var spellingPersonalWords: []
     function preferredSendAs(_r) { return null }
     function switchTo(_id) { return true }
@@ -84,6 +86,7 @@ Item {
     function init() {
       compose.parent.forceActiveFocus()
       compose.begin("new", null, "", [])
+      compose.spellingLanguage = "en_US"
       tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
       if (!compose.spellingAvailable) skip("spelling unavailable (" + compose.spellingStatus + ")")
     }

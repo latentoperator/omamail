@@ -56,6 +56,7 @@ Item {
     }
 
     function init() {
+      toast.clearance = 0
       toast.dismiss()
       fakeService.opened = []
     }
@@ -71,6 +72,16 @@ Item {
       compare(named(toast, "eml-saved-folder").text, "in /srv/mail")
       verify(toast.x + toast.width <= window.width, "the card stays inside the window")
       verify(toast.y + toast.height <= window.height)
+    }
+
+    function test_the_card_sits_above_the_reader_toolbar() {
+      saved("/srv/mail/Note.eml", "Note.eml")
+      var resting = toast.y
+      toast.clearance = 44
+      verify(toast.y + toast.height <= window.height - 28 - 44,
+        "the card clears the status line and the toolbar above it")
+      compare(toast.y, resting - 44)
+      toast.clearance = 0
     }
 
     function test_open_folder_opens_the_folder_and_closes_the_card() {

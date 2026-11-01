@@ -107,7 +107,7 @@ Item {
       } }
       fixture.errors = ({})
       seed()
-      service.backend.protocolInfo = { apiVersion: 7, protocol: 1, version: "0.0.0",
+      service.backend.protocolInfo = { apiVersion: 10, protocol: 1, version: "0.0.0",
         methods: ["mail.exportEml"] }
       wait(0)
       exportBaseline = exportRequests().length
@@ -132,7 +132,7 @@ Item {
     // sent — the keyboard path used to dispatch because it asked the provider
     // rather than the advertised method list.
     function test_the_export_requires_the_advertised_method() {
-      service.backend.protocolInfo = { apiVersion: 6, protocol: 1, version: "0.0.0",
+      service.backend.protocolInfo = { apiVersion: 9, protocol: 1, version: "0.0.0",
         methods: ["mail.read"] }
       wait(0)
       compare(service.backend.ready, true, "the released API 6 handshake remains ready")

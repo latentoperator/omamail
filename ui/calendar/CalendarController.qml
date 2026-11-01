@@ -4,6 +4,9 @@ import Quickshell.Io
 import qs.Commons
 import "Calendar.js" as Calendar
 import "Sources.js" as Sources
+import "Invitations.js" as Invitations
+import "../providers/MicrosoftOAuth.js" as Microsoft
+import "../backend/Plain.js" as Plain
 
 Item {
   id: root
@@ -73,10 +76,33 @@ Item {
   property bool eventWriting: false
   readonly property var availableSources: Sources.withMicrosoftAccounts(Sources.withGoogleAccounts(
     sourceList, service ? service.accountSummaries : []), service ? service.accountSummaries : [])
+  // Every account's calendars, not just this mailbox's: the entry hides only
+  // when no account has one and nothing was added in Settings.
+  readonly property bool noCalendars: Sources.hasNone(sourcesLoaded, availableSources)
+  // The view follows a zoom at once. The save waits for the keys to rest, because
+  // each one rewrites the shell's whole config and a held key repeats.
+  property int unsavedHourHeight: -1
+  readonly property int hourHeight: unsavedHourHeight >= 0 ? unsavedHourHeight
+    : Calendar.normalizeHourHeight(service && service.settings ? service.settings.calendarHourHeight : undefined)
+  function zoomHours(direction, shown, filled) {
+    if (!service) return
+    var next = Calendar.zoomedHourHeight(hourHeight, shown, direction, filled)
+    if (next === hourHeight) return
+    unsavedHourHeight = next
+    hourHeightSave.restart()
+  }
+  function saveHourHeight() {
+    if (unsavedHourHeight < 0 || !service) return
+    service.persistSetting("calendarHourHeight", unsavedHourHeight)
+    unsavedHourHeight = -1
+  }
+  Timer { id: hourHeightSave; interval: 300; onTriggered: root.saveHourHeight() }
+  Component.onDestruction: saveHourHeight()
   readonly property bool unifiedCalendarView: !!service
     && service.unifiedCalendarView === true
   readonly property var contextSources: unifiedCalendarView
-    ? availableSources : Sources.forAccount(availableSources, accountId)
+    ? availableSources : Sources.forAccount(availableSources, accountId,
+      (Invitations.destination(service ? service.settings : null, accountId) || {}).id)
   // One name for every mailbox, because the unified view is one view.
   //
   // A controller with no account is already showing every source — the bar
@@ -115,6 +141,11 @@ Item {
     return root.sourceIncluded(source)
   }).map(function(source) { return String(source.id || "") }).join("\n")
   onEnabledSourceKeyChanged: reloadVisibleRange()
+  Connections {
+    target: root.service
+    ignoreUnknownSignals: true
+    function onInvitationCalendarSaved() { root.reloadVisibleRange() }
+  }
 
   // No `eventCache.loaded` guard, and it is not missing. `refresh` refuses on
   // an unloaded cache and `eventCache.onRestored` runs one as soon as it is
@@ -215,6 +246,13 @@ Item {
     return count
   }
 
+  function microsoftConsentHandler(accountId) {
+    var host = accountId && service && typeof service.findAccount === "function" ? service.findAccount(accountId) : null
+    if (host && host.providerId === "outlook" && host.auth
+        && typeof host.auth.graphConsentHandler === "function") return host.auth.graphConsentHandler()
+    return function() { return false }
+  }
+
   function discoveryFailure(error) {
     // JSON-RPC codes are numeric; the backend's stable reason is its message.
     // Match only known reasons and never display the raw diagnostic.
@@ -244,13 +282,14 @@ Item {
     discoveringCalendars = true
     discoveringAccountId = wanted
     discoveryError = ""
+    var notifyConsent = microsoftConsentHandler(wanted)
     service.backend.call("calendar.discover", { accountId: wanted }, function(result, error) {
       if (serial !== root.discoverySerial || root.discoveringAccountId !== wanted) return
       root.discoveringCalendars = false
       root.discoveringAccountId = ""
       if (error || !result || String(result.accountId || "") !== wanted
           || !Array.isArray(result.calendars) || !root.discoverableAccount(wanted)) {
-        root.discoveryError = root.discoveryFailure(error)
+        root.discoveryError = notifyConsent(error) ? Microsoft.graphConsentMessage() : root.discoveryFailure(error)
         root.discoveryFinished(false, root.discoveryError, 0)
         return
       }
@@ -439,7 +478,10 @@ Item {
   }
 
   // What the delete confirmation asks: named, with a button per consequence.
-  function deleteRequest(sourceId, event) {
+  // The event comes through the views' `deleteRequested` signal, and on Qt
+  // 6.12 its recurrence arrives as a sequence that reads as no series.
+  function deleteRequest(sourceId, crossed) {
+    var event = Plain.plain(crossed)
     var request = Calendar.deleteRequest(event, findSource(String(sourceId || "")),
       service.backendCanGoogleCalendars === true)
     request.sourceId = String(sourceId || "")
@@ -580,11 +622,13 @@ Item {
     var params = fields || {}
     params.source = source
     params.operation = operation
+    var notifyConsent = microsoftConsentHandler(source && source.kind === "microsoft" ? source.accountId : "")
     service.backend.call("calendar.request", params, function(result, error) {
       var reason = ""
       if (error) {
-        reason = error.message === "calendar_conflict" ? "This event changed elsewhere. Refresh and try again."
-          : Calendar.nativeRequestError(String(source && source.kind || ""))
+        reason = notifyConsent(error) ? Microsoft.graphConsentMessage()
+          : error.message === "calendar_conflict" ? "This event changed elsewhere. Refresh and try again."
+          : Calendar.nativeRequestError(String(source && source.kind || ""), source && source.accountId, error)
       }
       callback(result, reason)
     })

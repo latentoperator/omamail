@@ -37,7 +37,7 @@ Item {
     }
     property bool folderable: true
     property var chosen: []
-    function canChooseEmlFolder(id) { return exportable && folderable }
+    readonly property bool standalone: !folderable
     function exportEmlToFolder(accountId, id) {
       chosen = chosen.concat([{ account: String(accountId), id: String(id) }])
       return true
@@ -64,9 +64,14 @@ Item {
     name: "MessageMenuExport"
     when: windowShown
 
-    // exportRow sits after star, before the browser and AI rows.
-    function exportRow() { return menu.menuRows[11] }
-    function exportFolderRow() { return menu.menuRows[12] }
+    // Found by name: upstream keeps adding rows ahead of these two.
+    function rowNamed(name) {
+      for (var i = 0; i < menu.menuRows.length; i++)
+        if (menu.menuRows[i].objectName === name) return menu.menuRows[i]
+      return null
+    }
+    function exportRow() { return rowNamed("message-menu-export-eml") }
+    function exportFolderRow() { return rowNamed("message-menu-export-eml-folder") }
 
     function summary() {
       return { id: "42:INBOX", subject: "Project update", unread: false,

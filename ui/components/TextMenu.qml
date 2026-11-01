@@ -69,10 +69,10 @@ Item {
   // before it pastes text, and only it knows how.
   signal pasteRequested(var target)
   signal openLinkRequested(string url)
-  signal saveEmlRequested(bool chooseFolder)
   signal spellingCorrect(string replacement)
   signal spellingIgnore(string word)
   signal spellingAddToDictionary(string word)
+  signal saveEmlRequested(bool chooseFolder)
 
   anchors.fill: parent
   z: 50

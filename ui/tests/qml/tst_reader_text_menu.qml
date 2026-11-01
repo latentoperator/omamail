@@ -60,7 +60,7 @@ Item {
     property bool folderable: true
     property var exported: []
     function canExportEmlFor(id) { return exportable }
-    function canChooseEmlFolder(id) { return exportable && folderable }
+    readonly property bool standalone: !folderable
     function exportEml(id) { exported = exported.concat([{ id: String(id), folder: false }]); return true }
     function accountForMessage(id) { return "imap:reader@example.com" }
     function sourceIdFor(id) { return "native-" + id }

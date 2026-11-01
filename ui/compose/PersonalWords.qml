@@ -55,6 +55,20 @@ Item {
     })
   }
 
+  // Only a missing file means "no words yet". Any other read failure leaves
+  // an existing list on disk that this session has not seen, so the store
+  // stays unloaded: words added now still work in memory (save() only queues
+  // them) and the unread file is never replaced by this session's snapshot.
+  // Quickshell and the standalone shim both pass FileViewError (FileNotFound
+  // is 2). Only the inert test shim passes nothing, and it never reads a file.
+  function readFailed(error) {
+    if (error === undefined || error === null || Number(error) === 2) {
+      merge("")
+      return
+    }
+    store.error = "Could not read saved personal words; new words are kept for this session only"
+  }
+
   function add(word) {
     var value = String(word || "")
     if (value === "" || words.indexOf(value) >= 0) return
@@ -80,6 +94,6 @@ Item {
     // Merge rather than replace: a word added before the read returned is this
     // session's and must not be undone by yesterday's file.
     onLoaded: store.merge(text())
-    onLoadFailed: store.merge("")
+    onLoadFailed: function(error) { store.readFailed(error) }
   }
 }

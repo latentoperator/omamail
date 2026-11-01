@@ -1,14 +1,22 @@
 import QtQuick
 import QtTest
 import "../../components" as Omamail
+import "../../compose/Spelling.js" as Spelling
 
 // The real composer attaches the optional spelling adapter to its body
 // document, does not change the draft while checking, and unloads cleanly when
-// disabled. Underlines are proven by the adapter contract test and the Sonnet
-// probe; here the point is the wiring, not the highlighter.
+// disabled. These tests also exercise the visible, bounded underline passes.
 Item {
   width: 900
   height: 600
+  property bool watchUnderlines: false
+  property int minimumUnderlines: 0
+  Connections {
+    target: compose
+    function onSpellingDelegateCountChanged() {
+      if (watchUnderlines) minimumUnderlines = Math.min(minimumUnderlines, compose.spellingDelegateCount)
+    }
+  }
 
   QtObject {
     id: mailService
@@ -23,6 +31,12 @@ Item {
     ]
     property string accountEmail: "me@example.com"
     property string activeAccountId: "me@example.com"
+    property var configWrites: []
+    function writeConfig(name, text, callback) {
+      configWrites = configWrites.concat([String(name)])
+      if (typeof callback === "function") callback(false, "No filesystem writer in this fixture")
+      return false
+    }
     property var spellingPersonalWords: []
     function preferredSendAs(_r) { return null }
     function switchTo(_id) { return true }
@@ -78,6 +92,7 @@ Item {
     }
 
     function init() {
+      watchUnderlines = false
       compose.begin("new", null, "", [])
       // Reset the layout and the requested language: an earlier case may have
       // narrowed the composer or pointed at a dictionary that is not here.
@@ -85,6 +100,227 @@ Item {
       compose.contentDirection = ""
       compose.spellingEnabled = true
       compose.spellingLanguage = "en_US"
+      named(compose, "compose-body").contentY = 0
+    }
+
+    function readyAdapter() {
+      tryVerify(function() { return compose.spellingAdapter !== null || compose.spellingStatus === "no-module" }, 3000)
+      if (!compose.spellingAvailable) { skip("spelling unavailable (" + compose.spellingStatus + ")"); return null }
+      return compose.spellingAdapter
+    }
+
+    function test_long_body_only_paints_visible_bounded_ranges_and_scrolls_to_end() {
+      if (!readyAdapter()) return
+      var body = named(compose, "compose-body-editor")
+      var flick = named(compose, "compose-body")
+      body.text = "mispelled ".repeat(10000)
+      flick.contentY = 0
+      compose.refreshSpellingRanges()
+      tryVerify(function() { return compose.spellingPass && compose.spellingPass.done }, 5000)
+      verify(compose.spellingDelegateCount > 0)
+      verify(compose.spellingDelegateCount <= Spelling.MAX_UNDERLINE_RANGES)
+      verify(compose.spellingRanges.length <= Spelling.MAX_UNDERLINE_RANGES)
+      verify(compose.spellingWindow.end - compose.spellingWindow.start <= Spelling.MAX_WINDOW_CHARACTERS)
+      for (var i = 0; i < compose.spellingRanges.length; i++) {
+        var box = body.positionToRectangle(compose.spellingRanges[i].start)
+        verify(box.y >= flick.contentY && box.y < flick.contentY + flick.height)
+      }
+      verify(compose.spellingRanges[compose.spellingRanges.length - 1].end < body.text.length / 2)
+      flick.contentY = flick.contentHeight - flick.height
+      tryVerify(function() {
+        return compose.spellingRanges.length > 0
+          && compose.spellingRanges[compose.spellingRanges.length - 1].end > 99000
+      }, 5000)
+      verify(compose.spellingDelegateCount <= Spelling.MAX_UNDERLINE_RANGES)
+      verify(compose.spellingRanges[0].start > 90000)
+    }
+
+    function test_typing_keeps_underlines_before_the_caret_until_replaced() {
+      if (!readyAdapter()) return
+      var body = named(compose, "compose-body-editor")
+      body.text = "mispelled here wrod here "
+      compose.refreshSpellingRanges()
+      tryVerify(function() { return compose.spellingPass && compose.spellingPass.done })
+      compare(compose.spellingRanges.length, 2)
+      minimumUnderlines = compose.spellingDelegateCount
+      watchUnderlines = true
+      body.cursorPosition = body.text.indexOf("wrod") + 2
+      body.forceActiveFocus()
+      keyClick(Qt.Key_X, Qt.NoModifier, 0)
+      compare(compose.spellingRanges.length, 1, "only the unchanged prefix is retained")
+      compare(compose.spellingRanges[0].start, 0)
+      tryVerify(function() { return compose.spellingPass && compose.spellingPass.done })
+      verify(minimumUnderlines > 0, "underlines never disappear during typing or publication")
+      compare(compose.spellingRanges[0].start, 0)
+    }
+
+    function test_scrolling_keeps_underlines_until_the_next_pass() {
+      if (!readyAdapter()) return
+      var body = named(compose, "compose-body-editor")
+      var flick = named(compose, "compose-body")
+      body.text = "mispelled here wrod here \n".repeat(100)
+      compose.refreshSpellingRanges()
+      tryVerify(function() { return compose.spellingPass && compose.spellingPass.done })
+      var underline = named(compose, "spelling-underline")
+      var contentY = underline.y
+      minimumUnderlines = compose.spellingDelegateCount
+      watchUnderlines = true
+      flick.contentY += 20
+      compare(underline.y, contentY, "segments stay in content coordinates")
+      verify(compose.spellingDelegateCount > 0, "the scroll step keeps the existing model")
+      tryVerify(function() { return compose.spellingPass && compose.spellingPass.done })
+      verify(minimumUnderlines > 0, "scrolling and publication never empty the model")
+    }
+
+    function test_removing_a_word_drops_its_underline() {
+      if (!readyAdapter()) return
+      var body = named(compose, "compose-body-editor")
+      body.text = "mispelled here wrod here "
+      compose.refreshSpellingRanges()
+      tryVerify(function() { return compose.spellingPass && compose.spellingPass.done })
+      compare(compose.spellingRanges.length, 2)
+      body.remove(15, 20)
+      tryVerify(function() { return compose.spellingPass && compose.spellingPass.done })
+      compare(compose.spellingRanges, [{ start: 0, end: 9 }])
+      compare(compose.spellingDelegateCount, 1)
+    }
+
+    function test_revision_change_abandons_an_incomplete_pass_before_it_can_paint() {
+      var adapter = readyAdapter()
+      if (!adapter) return
+      var body = named(compose, "compose-body-editor")
+      body.text = "mispelled ".repeat(10000)
+      compose.refreshSpellingRanges()
+      compose.processSpellingSlice()
+      var oldPass = compose.spellingPass
+      verify(oldPass && !oldPass.done, "long work yields to the next tick")
+      body.insert(0, "correct ")
+      compare(compose.spellingDelegateCount, 0)
+      compare(compose.spellingRanges.length, 0)
+      compare(compose.spellingPass, null)
+      // Even an explicitly delivered stale continuation cannot paint.
+      compose.spellingPass = oldPass
+      compose.processSpellingSlice()
+      compare(compose.spellingDelegateCount, 0)
+      compare(compose.spellingPass, null)
+    }
+
+    function test_reply_addresses_and_links_are_not_underlined_but_adjacent_typos_are() {
+      if (!readyAdapter()) return
+      var body = named(compose, "compose-body-editor")
+      body.text = "On Fri, Sam Rivera <sam@example.com> wrote: shedule https://x.y/recieve?teh=wrod#shedule. "
+      compose.refreshSpellingRanges()
+      tryVerify(function() { return compose.spellingPass && compose.spellingPass.done })
+      var typo = body.text.indexOf("shedule")
+      var address = body.text.indexOf("sam@example.com")
+      var link = body.text.indexOf("https:")
+      var found = false
+      for (var i = 0; i < compose.spellingRanges.length; i++) {
+        var range = compose.spellingRanges[i]
+        if (range.start === typo) found = true
+        verify(range.end <= address || range.start >= address + 15)
+        verify(range.end <= link)
+      }
+      verify(found, "a real prose typo on the same line still has an underline")
+      var before = body.text
+      var box = body.positionToRectangle(address + 1)
+      mouseClick(body, box.x + 2, box.y + box.height / 2, Qt.RightButton)
+      var menu = named(compose, "compose-text-menu")
+      tryCompare(menu, "opened", true)
+      compare(menu.spellingMisspelled, false)
+      compare(menu.spellingSuggestions.length, 0)
+      compare(menu.ignoreWordRow.visible, false)
+      menu.close()
+      body.cursorPosition = link + 14
+      body.forceActiveFocus()
+      keyClick(Qt.Key_Period, Qt.ControlModifier)
+      wait(20)
+      compare(menu.opened, false, "Ctrl+. has no correction menu for a link")
+      compare(compose.openSpellingAtCaret(), false)
+      compare(body.text, before)
+    }
+
+    function test_non_prose_never_warms_the_dictionary_cache() {
+      var adapter = readyAdapter()
+      if (!adapter) return
+      var body = named(compose, "compose-body-editor")
+      body.text = "<sam@example.com> https://x.y/recieve?teh=wrod#shedule www.x.y/wrod mailto:sam "
+      adapter.resetCache()
+      compose.refreshSpellingRanges()
+      tryVerify(function() { return compose.spellingPass && compose.spellingPass.done })
+      compare(adapter.verdictCache.size, 0)
+      compare(compose.spellingRanges.length, 0)
+      compare(compose.spellingDelegateCount, 0)
+    }
+
+    function test_quoted_reply_lines_never_reach_the_checker() {
+      var adapter = readyAdapter()
+      if (!adapter) return
+      var body = named(compose, "compose-body-editor")
+      body.text = ("> mispelled wrod \n").repeat(6000)
+      adapter.resetCache()
+      compose.refreshSpellingRanges()
+      tryVerify(function() { return compose.spellingPass && compose.spellingPass.done }, 5000)
+      compare(adapter.verdictCache.size, 0)
+      compare(compose.spellingDelegateCount, 0)
+      body.cursorPosition = 4
+      body.forceActiveFocus()
+      compare(compose.openSpellingAtCaret(), false)
+    }
+
+    function test_suggestions_inspect_a_word_outside_the_processed_window_on_demand() {
+      if (!readyAdapter()) return
+      var body = named(compose, "compose-body-editor")
+      body.text = "correct ".repeat(12500) + "mispelled "
+      named(compose, "compose-body").contentY = 0
+      compose.refreshSpellingRanges()
+      var firstWindowEnd = compose.spellingWindow.end
+      body.cursorPosition = body.text.length - 5
+      body.forceActiveFocus()
+      verify(body.cursorPosition > firstWindowEnd)
+      verify(compose.openSpellingAtCaret())
+      var menu = named(compose, "compose-text-menu")
+      compare(menu.spellingWord, "mispelled")
+      verify(menu.spellingSuggestions.length > 0)
+      menu.close()
+    }
+
+    function test_complete_local_spelling_session() {
+      if (!readyAdapter()) return
+      mailService.configWrites = []
+      var body = named(compose, "compose-body-editor")
+      var menu = named(compose, "compose-text-menu")
+      body.forceActiveFocus()
+      var typed = "mispelled "
+      for (var i = 0; i < typed.length; i++) keyClick(typed.toUpperCase().charCodeAt(i), Qt.NoModifier, 0)
+      compare(body.text, typed)
+      tryVerify(function() { return compose.spellingRanges.length > 0 })
+      body.cursorPosition = 3
+      verify(compose.openSpellingAtCaret())
+      compare(menu.spellingWord, "mispelled")
+      verify(menu.spellingSuggestions.length > 0)
+      menu.chooseSuggestion(0)
+      verify(body.text !== typed)
+      compare(compose.bodyWasEdited, true)
+      body.undo()
+      compare(body.text, typed)
+      body.insert(body.text.length, "zqxjlocalonlyspell ")
+      body.cursorPosition = body.text.indexOf("zqxjlocalonlyspell") + 2
+      body.forceActiveFocus()
+      verify(compose.openSpellingAtCaret())
+      menu.ignoreWordRow.activated()
+      compare(compose.spellingAdapter.inspect(body.cursorPosition).misspelled, false)
+      compose.spellingEnabled = false
+      tryVerify(function() { return compose.spellingAdapter === null })
+      compare(compose.spellingDelegateCount, 0)
+      compose.spellingEnabled = true
+      tryVerify(function() { return compose.spellingAvailable })
+      compose.spellingLanguage = "zz_ZZ"
+      tryCompare(compose, "spellingStatus", "no-dictionary")
+      compare(compose.spellingDelegateCount, 0)
+      compose.spellingLanguage = "en_US"
+      tryCompare(compose, "spellingStatus", "ready")
+      compare(mailService.configWrites.length, 0, "no spelling file writer was invoked")
     }
 
     function test_body_adapter_attaches_and_checking_does_not_mutate() {
@@ -113,7 +349,7 @@ Item {
       var component = Qt.createComponent("../../compose/SpellcheckAdapter.qml")
       compare(component.status, Component.Ready)
       var secondDoc = Qt.createQmlObject('import QtQuick; TextEdit { text: "zqxjremotereviewhere " }', compose)
-      var second = component.createObject(compose, { document: secondDoc.textDocument })
+      var second = component.createObject(compose, { document: secondDoc.textDocument, language: "en_US" })
       try {
         verify(second.available)
         second.ignoreForSession("zqxjremotereviewhere")
@@ -365,9 +601,7 @@ Item {
 
       compose.spellingLanguage = "en_GB"
       wait(250)
-      var live = JSON.stringify(compose.spellingRanges)
-      var actual = JSON.stringify(compose.spellingAdapter.misspelledRanges(body.text))
-      compare(live, actual, "ranges recheck after a valid-to-valid switch")
+      compare(compose.spellingRanges.length, 0, "en_GB accepts all the British spellings")
       verify(compose.spellingRanges.length < usRanges, "en_GB accepts the British spellings")
     }
   }

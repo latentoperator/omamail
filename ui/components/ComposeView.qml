@@ -44,7 +44,8 @@ DropArea {
   // one is wired, and falls back to the defaults for the tests
   // that instantiate it bare. A caller may still assign over the binding.
   property bool spellingEnabled: Spelling.decodeSettings(service ? { spellingEnabled: service.spellingEnabled } : null).enabled
-  property string spellingLanguage: Spelling.decodeSettings(service ? { spellingLanguage: service.spellingLanguage } : null).language
+  property string spellingLanguage: Spelling.resolveLanguage(
+    service ? service.spellingLanguage : "", Qt.locale().name)
   property var spellingPersonalWords: service ? service.spellingPersonalWords : []
   // Bumped on every body change so a menu opened before an edit can tell that
   // the text under its saved position moved.
@@ -79,33 +80,115 @@ DropArea {
 
   signal keyPressed(var event)
 
-  // A word is marked only once it is finished (something follows it), so this
-  // only has to keep up with the document; the completeness rule is what defers
-  // the underline while someone is still typing a word.
-  function refreshSpellingRanges() {
-    var adapter = spellingAdapter
-    spellingRanges = (adapter && spellingAvailable && spellingEnabled)
-      ? adapter.misspelledRanges(bodyEdit.text) : []
+  property var spellingPass: null
+  property var spellingWindow: ({ start: 0, end: 0 })
+  property int spellingGeneration: 0
+  readonly property int spellingDelegateCount: spellingSegments.count
+
+  function cancelSpellingPass() {
+    spellingGeneration += 1
+    spellingPass = null
+    spellingSlice.stop()
   }
+
+  // Keep only unchanged prefixes; native string comparisons avoid a body scan.
+  // Include the delimiter so typing at a word's end drops that word too.
+  function retainSpellingBeforeEdit(text, previous) {
+    var low = 0
+    var high = spellingRanges.length
+    while (low < high) {
+      var mid = Math.floor((low + high) / 2)
+      var end = spellingRanges[mid].end + 1
+      if (text.substring(0, end) === previous.substring(0, end)) low = mid + 1
+      else high = mid
+    }
+    spellingRanges = spellingRanges.slice(0, low)
+    var keptEnd = low > 0 ? spellingRanges[low - 1].end : 0
+    while (spellingSegments.count > 0
+        && spellingSegments.get(spellingSegments.count - 1).wordEnd > keptEnd)
+      spellingSegments.remove(spellingSegments.count - 1)
+  }
+
+  function scheduleSpellingLayout() {
+    cancelSpellingPass()
+    spellingScrollDebounce.restart()
+  }
+
+  function refreshSpellingRanges() {
+    cancelSpellingPass()
+    var adapter = spellingAdapter
+    if (!adapter || !spellingAvailable || !spellingEnabled || bodyFlick.height <= 0) {
+      spellingSegments.clear()
+      spellingRanges = []
+      return
+    }
+    var text = bodyEdit.text
+    var top = Math.max(0, bodyFlick.contentY)
+    var bottom = top + bodyFlick.height
+    var visibleStart = Math.min(bodyEdit.positionAt(0, top), bodyEdit.positionAt(bodyEdit.width, top))
+    var visibleEnd = Math.max(bodyEdit.positionAt(0, bottom), bodyEdit.positionAt(bodyEdit.width, bottom))
+    var marginTop = Math.max(0, top - bodyFlick.height)
+    var marginBottom = bottom + bodyFlick.height
+    var start = Math.min(bodyEdit.positionAt(0, marginTop), bodyEdit.positionAt(bodyEdit.width, marginTop))
+    var end = Math.max(bodyEdit.positionAt(0, marginBottom), bodyEdit.positionAt(bodyEdit.width, marginBottom))
+    spellingWindow = Spelling.wordWindow(text, start, end)
+    spellingPass = Spelling.createPass(text, spellingWindow, visibleStart, visibleEnd, bodyRevision)
+    spellingPass.generation = spellingGeneration
+    spellingPass.segments = []
+    spellingSlice.restart()
+  }
+
+  function processSpellingSlice() {
+    var pass = spellingPass
+    var adapter = spellingAdapter
+    if (!pass || !adapter || pass.revision !== bodyRevision || pass.generation !== spellingGeneration) {
+      cancelSpellingPass()
+      return
+    }
+    Spelling.advancePass(pass, function(word) { return adapter.isMisspelled(word) },
+      function() { return Date.now() }, function(range) {
+        var segments = Spelling.underlineSegments(range.start, range.end,
+          function(position) { return bodyEdit.positionToRectangle(position) },
+          bodyEdit.leftPadding, bodyEdit.width - bodyEdit.rightPadding)
+        var before = pass.segments.length
+        for (var i = 0; i < segments.length && pass.segments.length < Spelling.MAX_UNDERLINE_RANGES; i++) {
+          // Margin words warm the checker cache; only viewport geometry paints.
+          var segment = segments[i]
+          if (segment.y >= bodyFlick.contentY && segment.y < bodyFlick.contentY + bodyFlick.height)
+            pass.segments.push({ segmentX: segment.x, segmentY: segment.y,
+              segmentWidth: segment.width, wordEnd: range.end })
+        }
+        return pass.segments.length > before
+      })
+    if (pass.revision !== bodyRevision || pass.generation !== spellingGeneration) {
+      cancelSpellingPass()
+      return
+    }
+    if (!pass.done) { spellingSlice.restart(); return }
+    // Publish a complete view without an empty intermediate frame or model.
+    for (var i = 0; i < pass.segments.length; i++) spellingSegments.set(i, pass.segments[i])
+    if (spellingSegments.count > pass.segments.length)
+      spellingSegments.remove(pass.segments.length, spellingSegments.count - pass.segments.length)
+    spellingRanges = pass.ranges.slice()
+  }
+
+  onBodyRevisionChanged: cancelSpellingPass()
+  onSpellingLayoutKeyChanged: scheduleSpellingLayout()
   onSpellingAvailableChanged: refreshSpellingRanges()
   onSpellingEnabledChanged: refreshSpellingRanges()
-  // A valid-to-valid language switch leaves `spellingAvailable` true, so the
-  // ranges would keep the old dictionary's underlines. Re-check after the
-  // adapter has applied the new language (the debounce lets that land first).
-  onSpellingLanguageChanged: spellingDebounce.restart()
+  onSpellingLanguageChanged: { cancelSpellingPass(); spellingDebounce.restart() }
 
-  Timer {
-    id: spellingDebounce
-    interval: 120
-    repeat: false
-    onTriggered: root.refreshSpellingRanges()
-  }
+  ListModel { id: spellingSegments }
+  Timer { id: spellingSlice; interval: 1; onTriggered: root.processSpellingSlice() }
+  Timer { id: spellingScrollDebounce; interval: 40; onTriggered: root.refreshSpellingRanges() }
+  Timer { id: spellingDebounce; interval: 120; onTriggered: root.refreshSpellingRanges() }
 
   // Right-click: the word under the pointer, kept for the menu's spelling
   // section. Only the body is checked; another field clears the section.
   function prepareSpellingMenu(editor, x, y) {
     var adapter = spellingAdapter
-    if (!adapter || !spellingAvailable || editor !== bodyEdit) {
+    if (!adapter || !spellingAvailable || editor !== bodyEdit
+        || Spelling.quotedAt(bodyEdit.text, editor.positionAt(x, y))) {
       textMenu.spellingPosition = -1
       textMenu.spellingWord = ""
       textMenu.spellingMisspelled = false
@@ -127,6 +210,7 @@ DropArea {
     var adapter = spellingAdapter
     if (!bodyEdit.activeFocus || !spellingEnabled || !adapter || !spellingAvailable) return false
     var position = bodyEdit.cursorPosition
+    if (Spelling.quotedAt(bodyEdit.text, position)) return false
     var info = adapter.inspect(position)
     if (!info.misspelled) return false
     textMenu.spellingPosition = position
@@ -1983,6 +2067,8 @@ DropArea {
     anchors.topMargin: Style.space(12)
     contentWidth: width
     contentHeight: bodyEdit.height
+    onContentYChanged: root.scheduleSpellingLayout()
+    onHeightChanged: root.scheduleSpellingLayout()
     clip: true
     boundsBehavior: Flickable.StopAtBounds
     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
@@ -2013,6 +2099,7 @@ DropArea {
         // Sonnet can emit textChanged while rehighlighting an unchanged
         // document. Only a plain-text change edits the draft or its revision.
         if (text === lastPlainText) return
+        root.retainSpellingBeforeEdit(text, lastPlainText)
         lastPlainText = text
         root.noteDraftChanged()
         if (!root.settingBodyText && activeFocus) {
@@ -2035,30 +2122,17 @@ DropArea {
         id: spellingUnderlines
         anchors.fill: parent
         Repeater {
-          model: root.spellingRanges
-          delegate: Item {
-            required property var modelData
-            anchors.fill: parent
-            readonly property var segments: {
-              // Qt reads layout inputs internally; name them to refresh after
-              // a width or font change even when the ranges are unchanged.
-              root.spellingLayoutKey
-              return Spelling.underlineSegments(modelData.start, modelData.end,
-                function(position) { return bodyEdit.positionToRectangle(position) },
-                bodyEdit.leftPadding, bodyEdit.width - bodyEdit.rightPadding)
-            }
-            Repeater {
-              model: segments
-              delegate: Rectangle {
-                required property var modelData
-                objectName: "spelling-underline"
-                x: modelData.x
-                y: modelData.y
-                width: modelData.width
-                height: 1
-                color: root.errorColor
-              }
-            }
+          model: spellingSegments
+          delegate: Rectangle {
+            required property real segmentX
+            required property real segmentY
+            required property real segmentWidth
+            x: segmentX
+            y: segmentY
+            width: segmentWidth
+            objectName: "spelling-underline"
+            height: 1
+            color: root.errorColor
           }
         }
       }
@@ -2076,6 +2150,7 @@ DropArea {
     onLoaded: {
       if (!item) return
       item.document = bodyEdit.textDocument
+      item.editor = bodyEdit
       item.enabled = root.spellingEnabled
       item.personalWords = root.spellingPersonalWords
       root.refreshSpellingRanges()
@@ -2093,7 +2168,7 @@ DropArea {
 
   Connections {
     target: spellcheckLoader.item
-    function onCheckerChanged() { spellingDebounce.restart() }
+    function onCheckerChanged() { root.cancelSpellingPass(); spellingDebounce.restart() }
   }
 
   Rectangle {

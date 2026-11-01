@@ -22,6 +22,8 @@ QtObject {
   property var copied: []
   property var notifications: []
   property var files: ({})
+  // Paths that exist but cannot be read (permission denied, too large).
+  property var unreadable: ({})
   property var watched: ({})
   signal notificationActivated(string accountId, string messageId)
   signal reopenRequested()
@@ -38,6 +40,7 @@ QtObject {
     notificationError = ""
     pendingNotificationActivation = ({})
     files = ({ "/fixture/existing": "saved" })
+    unreadable = ({})
     watched = ({})
     hidden = false
     quitCalled = false
@@ -70,6 +73,10 @@ QtObject {
   }
   function read(path) {
     var key = String(path)
+    if (Object.prototype.hasOwnProperty.call(unreadable, key)) {
+      failed(key, "Permission denied")
+      return ({ ok: false, text: "", error: "Permission denied" })
+    }
     if (!Object.prototype.hasOwnProperty.call(files, key)) {
       // The native store announces a failed read as well as returning it.
       failed(key, "missing")
@@ -79,6 +86,7 @@ QtObject {
   }
   function exists(path) {
     var prefix = String(path || "") + "/"
+    if (Object.prototype.hasOwnProperty.call(unreadable, String(path))) return true
     for (var key in files) if (key === path || key.indexOf(prefix) === 0) return true
     return false
   }

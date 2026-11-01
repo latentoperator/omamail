@@ -22,31 +22,38 @@ Item {
   // highlighter by destroying the adapter (unload its Loader), not by clearing
   // this.
   property var document: null
+  // Read plain text only on inspection, not through a whole-body change binding.
+  property var editor: null
   // `enabled` is reused from Item rather than redeclared: the adapter is
   // non-visual, so this keeps the fixed interface name without shadowing
   // QQuickItem.enabled (which qmllint rejects). The owning Loader is inactive
   // when spelling is off, so this is a runtime toggle within a loaded adapter.
-  property string language: "en_US"
+  property string language: ""
+  readonly property string resolvedLanguage: Spelling.resolveLanguage(language, Qt.locale().name)
   // App-owned words to treat as correct. Persistence belongs to the
   // settings layer in Service.qml; this property only applies them.
   property var personalWords: []
-
   // Availability is about the *requested* language, and it is computed after
   // `setCurrentLanguage` rather than bound to `spellCheckerFound`.
   //
-  // When the requested dictionary is missing, Sonnet keeps the prior language
-  // and leaves `spellCheckerFound` true, so asking for `zz_ZZ` while `en_US` is
-  // installed would still read as ready. The accepted language is
-  // `currentLanguage`; comparing it with the request is what says "no
-  // dictionary for this one". The backing property is assigned in
-  // `applySettings` because `currentLanguage` does not notify, so a binding
-  // would hold a stale answer after the revert.
+  // On a missing dictionary Sonnet sets spellCheckerFound false, restores the
+  // previous language and returns without emitting currentLanguageChanged.
+  // Read both properties imperatively after the call, not through a binding.
   property bool requestedLanguageAvailable: false
   readonly property bool available: requestedLanguageAvailable
   // "ready", "disabled", or "no-dictionary". A missing module is reported by
   // the owning Loader as Loader.Error, not here.
   readonly property string status: !enabled ? "disabled"
                                             : (available ? "ready" : "no-dictionary")
+
+  property var verdictCache: Spelling.createCache()
+  function resetCache() { verdictCache = Spelling.createCache() }
+  function isMisspelled(word) {
+    if (!available || !enabled) return false
+    return Spelling.cachedVerdict(verdictCache, word, function(value) {
+      return highlighter.isWordMisspelled(value)
+    })
+  }
 
   signal checkerChanged()
   Component.onCompleted: {
@@ -55,7 +62,7 @@ Item {
   }
   Component.onDestruction: Session.unsubscribe(adapter)
   onEnabledChanged: applySettings()
-  onLanguageChanged: applySettings()
+  onResolvedLanguageChanged: applySettings()
   onPersonalWordsChanged: applyPersonalWords()
 
   // Returns { word, misspelled, suggestions }. Call this for the position of a
@@ -63,6 +70,8 @@ Item {
   function inspect(position) {
     if (!available || document === null) return { word: "", misspelled: false, suggestions: [] }
     var at = Math.max(0, Math.floor(position))
+    if (editor !== null && Spelling.nonProseAt(editor.text, at))
+      return { word: "", misspelled: false, suggestions: [] }
     var list = highlighter.suggestions(at, 5)
     return {
       word: String(highlighter.wordUnderMouse),
@@ -88,24 +97,16 @@ Item {
     Session.changed()
   }
 
-  // Only completed words receive underlines; Sonnet supplies the decision,
-  // while the shared rule keeps positions and completeness testable without Qt.
-  function misspelledRanges(text) {
-    if (!available || !enabled) return []
-    return Spelling.misspelledRanges(text, function(word) {
-      return highlighter.isWordMisspelled(word)
-    })
-  }
-
   function applySettings() {
+    resetCache()
     // The request is attempted even when the previous one reverted: a later
     // successful call is the only way back from a missing dictionary, and
     // guarding on the prior result would leave the switch unrecoverable.
-    highlighter.setCurrentLanguage(language)
+    if (resolvedLanguage !== "") highlighter.setCurrentLanguage(resolvedLanguage)
     // Sonnet reports the language it accepted. A request it could not serve
     // leaves the prior one in place, which is the no-dictionary answer.
     requestedLanguageAvailable = highlighter.spellCheckerFound
-      && highlighter.currentLanguage === language
+      && resolvedLanguage !== "" && highlighter.currentLanguage === resolvedLanguage
     if (enabled) applyPersonalWords()
   }
 

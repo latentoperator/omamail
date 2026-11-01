@@ -4,7 +4,9 @@ import qs.Commons
 import qs.Ui
 import "../message/Direction.js" as Direction
 import "../settings/Appearance.js" as Appearance
+import "../compose/Spelling.js" as Spelling
 import "../message/Html.js" as Html
+import "../account/Accounts.js" as Accounts
 
 // Where mailboxes are managed.
 //
@@ -31,6 +33,8 @@ Column {
   signal openCalendarRequested()
   signal calendarSignInRequested(int index)
 
+  readonly property string spellingLanguage: Spelling.resolveLanguage(
+    service ? service.spellingLanguage : "", Qt.locale().name)
   readonly property var accounts: service ? service.accountSummaries : []
   // A separate list on purpose: accountSummaries carries live mailbox state and
   // is replaced on a poll, which would rebuild the field being typed in.
@@ -88,25 +92,43 @@ Column {
       service.setAccountLabel(selectedNameAccountId, nameEdit.text)
   }
 
+  // Whether the selected mailbox takes its From name from here. The others
+  // are named by their server, and a field that changed nothing on the sent
+  // message would be a promise the page could not keep. So would one on a
+  // backend too old to write the name.
+  readonly property bool senderNameEditable: {
+    var entry = signatureAccount(selectedNameAccountId)
+    return !!(service && service.backendCanNameSender && entry
+      && Accounts.namesSender(entry.provider))
+  }
+
+  function saveSenderName() {
+    if (service && senderNameEditable)
+      service.setAccountSenderName(selectedNameAccountId, senderNameEdit.text)
+  }
+
+  function showNameAccount(next) {
+    selectedNameAccountId = next ? String(next.id || "") : ""
+    nameEdit.text = next ? String(next.label || "") : ""
+    senderNameEdit.text = next ? String(next.senderName || "") : ""
+  }
+
   function selectNameAccount(id) {
     var next = signatureAccount(id)
     if (!next || String(next.id || "") === selectedNameAccountId) return
     saveName()
-    selectedNameAccountId = String(next.id || "")
-    nameEdit.text = String(next.label || "")
+    saveSenderName()
+    showNameAccount(next)
   }
 
   function ensureNameAccount() {
     if (signatureAccounts.length === 0) {
-      selectedNameAccountId = ""
-      nameEdit.text = ""
+      showNameAccount(null)
       return
     }
     if (signatureAccount(selectedNameAccountId)) return
     var activeId = service ? String(service.activeAccountId || "") : ""
-    var next = signatureAccount(activeId) || signatureAccounts[0]
-    selectedNameAccountId = String(next.id || "")
-    nameEdit.text = String(next.label || "")
+    showNameAccount(signatureAccount(activeId) || signatureAccounts[0])
   }
 
   // The imported markup for the selected mailbox, and the import in flight.
@@ -850,19 +872,40 @@ Column {
         textFormat: Text.PlainText
       }
 
+      Text {
+        objectName: "spellingLanguagePolicy"
+        width: parent.width
+        id: spellingLanguagePolicy
+        text: root.spellingLanguage === ""
+          ? "No system language is set; choose one with the spellingLanguage setting."
+          : (root.service && root.service.spellingEnabled === true
+            ? "Checking spelling in " : "When on, checks spelling in ") + root.spellingLanguage
+          + (root.service && Spelling.decodeSettings(root.service.settings).language !== ""
+            ? " (set in settings)." : " (system language).")
+        color: root.dimColor
+        font.family: root.panelFontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+        textFormat: Text.PlainText
+      }
+
       // Availability is a runtime fact, separate from the enabled request:
-      // a machine without Sonnet or the en_US dictionary still composes.
+      // a machine without Sonnet or its language dictionary still composes.
       // Sonnet lists installed dictionaries once per process, so a dictionary
       // installed while Omamail runs is only found after a restart.
       Text {
         objectName: "spellingNeedsSetup"
         width: parent.width
-        visible: !!root.service && !root.service.spellingAvailable
-        text: root.service && root.service.spellingStatus === "no-module"
+        visible: !!root.service && root.service.spellingEnabled === true
+          && !root.service.spellingAvailable && root.service.spellingStatus !== "loading"
+        text: root.service && root.service.standalone === true
+          ? "Spell-checking is not available in this build."
+          : root.service && root.service.spellingStatus === "no-module"
           ? "Spell-checking is unavailable: install the Sonnet QML module, then restart Omamail."
-          : "The " + (root.service ? root.service.spellingLanguage : "en_US")
+          : root.spellingLanguage === "" ? spellingLanguagePolicy.text
+          : "The " + root.spellingLanguage
             + " dictionary is not installed. Install the matching Hunspell "
-            + "dictionary package (for example hunspell-en_us), then restart Omamail."
+            + "dictionary package (hunspell-<language>, for example hunspell-de), then restart Omamail."
         color: root.accentColor
         font.family: root.panelFontFamily
         font.pixelSize: Style.font.caption
@@ -905,7 +948,7 @@ Column {
       anchors.right: parent.right
       anchors.rightMargin: Style.space(10)
       anchors.verticalCenter: parent.verticalCenter
-      checked: !root.service || root.service.spellingEnabled !== false
+      checked: !!root.service && root.service.spellingEnabled === true
       foreground: root.textColor
       accent: root.accentColor
       onToggled: if (root.service) root.service.setSpellingEnabled(!root.service.spellingEnabled)
@@ -1279,7 +1322,7 @@ Column {
 
     Text {
       width: parent.width
-      text: "Name"
+      text: "Mailbox name"
       color: root.textColor
       font.family: root.panelFontFamily
       font.pixelSize: Style.font.bodySmall
@@ -1312,6 +1355,47 @@ Column {
       text: "What this mailbox is called in Omamail — in the switcher, in this "
         + "list, and beside every message in a combined view. Leave it empty "
         + "to use the address. It is not sent to anyone."
+      color: root.dimColor
+      font.family: root.panelFontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
+
+    Item {
+      width: parent.width
+      implicitHeight: Style.space(4)
+      visible: root.senderNameEditable
+    }
+
+    Text {
+      width: parent.width
+      visible: root.senderNameEditable
+      text: "Your name"
+      color: root.textColor
+      font.family: root.panelFontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+
+    TextField {
+      id: senderNameEdit
+      objectName: "settings-sender-name-editor"
+      visible: root.senderNameEditable
+      width: parent.width
+      foreground: root.textColor
+      accent: root.accentColor
+      font.family: root.panelFontFamily
+      font.pixelSize: Style.font.bodySmall
+
+      onActiveFocusChanged: if (!activeFocus) root.saveSenderName()
+      onAccepted: root.saveSenderName()
+    }
+
+    Text {
+      width: parent.width
+      visible: root.senderNameEditable
+      textFormat: Text.PlainText
+      text: "Who your mail is from, as recipients see it beside this mailbox's "
+        + "address. Leave it empty to send the address alone."
       color: root.dimColor
       font.family: root.panelFontFamily
       font.pixelSize: Style.font.caption

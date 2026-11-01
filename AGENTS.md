@@ -21,15 +21,20 @@ Read the relevant document before changing its area; these contain constraints t
 | HEY | [docs/providers/hey.md](docs/providers/hey.md) |
 | IMAP, SMTP and Proton Bridge | [docs/providers/imap.md](docs/providers/imap.md) |
 | JMAP discovery and streaming | [docs/providers/jmap.md](docs/providers/jmap.md) |
+| Microsoft 365 over Graph | [docs/providers/m365.md](docs/providers/m365.md) |
 | Message HTML, images, direction and outgoing MIME | [docs/MESSAGE-RENDERING.md](docs/MESSAGE-RENDERING.md) |
 | Network requests, credentials, subprocesses and security reviews | [docs/SECURITY-BOUNDARIES.md](docs/SECURITY-BOUNDARIES.md) |
 | Backend APIs, binary pins and releases | [docs/BACKEND-RUNTIME.md](docs/BACKEND-RUNTIME.md) |
+| Adding, changing or reviewing tests | [docs/TESTING.md](docs/TESTING.md) |
+| Writing issue reports, PR descriptions, reviews or discussion comments | [CONTRIBUTING.md — Write for people](CONTRIBUTING.md#write-for-people) |
+| Before making a commit or creating, updating, reviewing or requesting review of a pull request, including review follow-ups | [CONTRIBUTING.md](CONTRIBUTING.md) — mandatory; the single source of truth for commit/PR guidelines and evidence requirements |
 
 ## Structure and boundaries
 
 - Group by module, not file type. Rust lives in `src/`, CLI handling in `src/cli/`, and dispatch in `src/backend/`. QML and its JavaScript live together under `ui/`. Rust unit tests live with their modules; UI tests live in `ui/tests/`; integration tests live in `tests/`.
 - Rust owns mail business logic and durable agent jobs. QML owns presentation and interaction state, communicating with the persistent backend over stdin/stdout rather than invoking CLI commands. See `docs/BACKEND.md` and `docs/ARCHITECTURE.md`.
-- QML JavaScript libraries start with `.pragma library` and use `var` and `function`, not `const`, `let`, arrows or template literals. Put testable presentation rules there. Tests load module paths, e.g. `load("cache/Cache.js")`; `ui/tests/load.js` resolves QML `.import` chains.
+- QML JavaScript libraries start with `.pragma library` and use `var` and `function`, not `const`, `let`, arrows or template literals. Put testable presentation rules there. Tests load module paths, e.g. `load("compose/Senders.js")`; `ui/tests/load.js` resolves QML `.import` chains.
+- A list or object received through a `var` signal argument (on Qt 6.12) or a delegate's `modelData` is a sequence or reference object, not a JavaScript array or object: `Array.isArray` says no and its keys come back sorted. A receiver that judges such a value, keeps it or writes to it takes `Plain.plain` (`ui/backend/Plain.js`) of it first; `ui/tests/qml/tst_signal_lists.qml` shows the pattern.
 - List new QML files in the Makefile's lint inputs and import other modules explicitly.
 - `Service.qml` is shell-constructed and must declare no required properties. The shell injects only `shell`, `manifest`, `pluginRegistry`, and `barWidgetRegistry`; settings arrive through the bar widget's `applySettings`.
 
@@ -54,13 +59,9 @@ Read the relevant document before changing its area; these contain constraints t
 - Preserve account/draft ownership, human approval of AI proposals, and normal outbox dispatch. Model text must not supply routing or permission to send mail.
 - Every review states **Security: PASS / BLOCK / NOT VERIFIED** for the affected boundaries. Missing evidence or a security failure blocks approval/release. Security regressions must verify the forbidden effect did not happen, not merely that an error was returned; follow `docs/SECURITY-BOUNDARIES.md`.
 
-## Repository and pull requests
+## Review priorities
 
-- Keep runtime assets, source, tests and maintained documentation in the tree. Keep planning notes and screenshots outside it. Upload PR screenshots to GitHub attachments; tracked files must stay under 128 KiB.
-- UI PRs require labeled before/after screenshots of every changed view/state at matching dimensions, theme and scale, using synthetic or redacted data. Update them when the UI changes and explain the visible differences.
-- Commit/PR titles name the concrete machinery and action. Use `Fix ` for bugs, `Add ` for features, otherwise an accurate imperative. Prefix AI changes with `ai: `, repository documentation with `docs: `, website work with `website: `, and build/CI/release/tooling maintenance with `chore: `. Choose one prefix from the primary outcome.
-- Reconcile the title and description with the complete final diff whenever scope changes. Describe shipped behavior, architectural reasons and verification actually performed. User-visible PRs include concise bullets under `## Release Notes`.
-- Markdown prose uses one source line per paragraph.
+Start with [CONTRIBUTING.md — Review](CONTRIBUTING.md#review) for scope decisions, review priorities and comment style. Use this file's task index to read only the domain guidance relevant to the change. Product, design and verification requirements belong in their source documents rather than being repeated in reviewer prompts.
 
 ## Releasing and verification
 

@@ -27,6 +27,8 @@ fn list_handles_literals_noselect_special_use_and_modified_utf7() {
     let value = folders_value(&boxes);
     assert_eq!(value["labels"].as_array().unwrap().len(), 2);
     assert_eq!(value["labels"][1]["name"], "日本語");
+    assert_eq!(value["labels"][1]["id"], "&ZeVnLIqe-");
+    assert_eq!(value["labels"][1]["rawName"], "&ZeVnLIqe-");
 }
 #[test]
 fn date_pages_are_descending_unique_with_uid_tiebreaker() {
@@ -91,7 +93,7 @@ async fn sparse_search_orders_by_date_before_paging_even_when_progressive() {
             write(&mut w, b"* 1 FETCH (UID 7)\r\n* 2 FETCH (UID 1000)\r\n* 3 FETCH (UID 50000)\r\nO1 OK snapshot\r\n").await.unwrap();
             assert_eq!(
                 line(&mut w).await.unwrap(),
-                b"O1 UID FETCH 7,1000,50000 (UID INTERNALDATE)\r\n"
+                b"O1 UID FETCH 7:50000 (UID INTERNALDATE)\r\n"
             );
             write(&mut w,b"* 1 FETCH (UID 7 INTERNALDATE \"23-Sep-2026 12:00:00 +0000\")\r\n* 2 FETCH (UID 1000 INTERNALDATE \"22-Sep-2026 12:00:00 +0000\")\r\n* 3 FETCH (UID 50000 INTERNALDATE \"21-Sep-2026 12:00:00 +0000\")\r\nO1 OK snapshot\r\n").await.unwrap();
             assert_eq!(
@@ -127,6 +129,68 @@ fn unsolicited_flags_preserve_snapshot_dates() {
 }
 
 #[tokio::test]
+async fn date_scan_fits_a_server_capping_each_argument_at_4096_bytes() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let peer = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut w: Wire = BufReader::new(Box::new(stream));
+        greeting(&mut w).await;
+        // A sparse four-digit inbox: as a comma list its UIDs need ~9 KB.
+        let inbox: Vec<u32> = (4..=2300).filter(|uid| uid % 7 != 0).collect();
+        while let Ok(raw) = line(&mut w).await {
+            let request = String::from_utf8(raw).unwrap();
+            let request = request.trim_end();
+            // Stalwart refuses any single argument longer than 4096 bytes.
+            if request.split(' ').any(|arg| arg.len() > 4096) {
+                write(
+                    &mut w,
+                    b"O1 BAD [PARSE] Argument exceeds maximum length of 4096 bytes.\r\n",
+                )
+                .await
+                .unwrap();
+                continue;
+            }
+            let mut response = String::new();
+            if request == "O1 SELECT \"INBOX\"" {
+                response.push_str("O1 OK selected\r\n");
+            } else if let Some(fetch) = request.strip_prefix("O1 UID FETCH ") {
+                let (set, fields) = fetch.split_once(' ').unwrap();
+                let wanted = |uid: u32| {
+                    set.split(',').any(|part| match part.split_once(':') {
+                        Some((first, "*")) => uid >= first.parse().unwrap(),
+                        Some((first, last)) => {
+                            (first.parse().unwrap()..=last.parse().unwrap()).contains(&uid)
+                        }
+                        None => uid == part.parse::<u32>().unwrap(),
+                    })
+                };
+                let dated = fields.contains("INTERNALDATE");
+                for uid in inbox.iter().copied().filter(|uid| wanted(*uid)) {
+                    response.push_str(&if dated {
+                        format!("* {uid} FETCH (UID {uid} INTERNALDATE \"21-Sep-2026 12:00:00 +0000\")\r\n")
+                    } else {
+                        format!("* {uid} FETCH (UID {uid})\r\n")
+                    });
+                }
+                response.push_str("O1 OK fetched\r\n");
+            } else {
+                panic!("unexpected command: {request}");
+            }
+            write(&mut w, response.as_bytes()).await.unwrap();
+        }
+    });
+    let mut p = params(port);
+    p["query"] = json!("folder:INBOX");
+    let page = super::super::call("imap.list", &p).await.unwrap();
+    assert_eq!(
+        page["page"]["ids"],
+        json!(["2300:INBOX", "2299:INBOX", "2298:INBOX"])
+    );
+    peer.abort();
+}
+
+#[tokio::test]
 async fn multi_window_dates_settle_before_paging_and_ignore_unsolicited_flags() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -146,7 +210,8 @@ async fn multi_window_dates_settle_before_paging_and_ignore_unsolicited_flags() 
                 let ids: Vec<u32> = if set == "1:*" {
                     (1..=4100).collect()
                 } else {
-                    set.split(',').map(|s| s.parse().unwrap()).collect()
+                    let (first, last) = set.split_once(':').unwrap_or((set, set));
+                    (first.parse().unwrap()..=last.parse().unwrap()).collect()
                 };
                 let dated = fields.contains("INTERNALDATE");
                 if dated {
@@ -260,6 +325,105 @@ async fn original_query_controls_are_rejected_before_connecting() {
             .await
             .is_err()
     );
+}
+/// A 10 000-message INBOX on a server that answers every command in three
+/// seconds: nine replies, twenty-seven seconds, and nothing wrong with either
+/// side. The call budget has to clear that, because what it exists to stop is a
+/// call that never ends rather than one that is merely slow. Real seconds, on
+/// purpose: the budget this replaces is a wall-clock 22 s, and there is no way
+/// to spend more than that without spending it.
+#[tokio::test]
+async fn a_slow_server_that_answers_every_command_still_pages() {
+    const SLOW: Duration = Duration::from_secs(3);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let peer = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut w: Wire = BufReader::new(Box::new(stream));
+        write(&mut w, b"* OK ready\r\n").await.unwrap();
+        let mut replies = 0u32;
+        loop {
+            let request = String::from_utf8(line(&mut w).await.unwrap()).unwrap();
+            replies += 1;
+            // Well inside one command's budget, and well outside the call's
+            // old one once the conversation has run its length.
+            tokio::time::sleep(SLOW).await;
+            let mut response = String::new();
+            let last = if request.starts_with("O1 LOGIN") {
+                response.push_str("O1 OK login\r\n");
+                false
+            } else if request.starts_with("O1 CAPABILITY") {
+                response.push_str("* CAPABILITY IMAP4rev1\r\nO1 OK caps\r\n");
+                false
+            } else if request.starts_with("O1 LIST") {
+                response.push_str("* LIST () \"/\" INBOX\r\nO1 OK folders\r\n");
+                false
+            } else if request == "O1 SELECT \"INBOX\"\r\n" {
+                response.push_str("O1 OK selected\r\n");
+                false
+            } else if let Some(fetch) = request.strip_prefix("O1 UID FETCH ") {
+                let (set, fields) = fetch.trim_end().split_once(' ').unwrap();
+                let dated = fields.contains("INTERNALDATE");
+                let ids: Vec<u32> = if set == "1:*" {
+                    (1..=9000).collect()
+                } else {
+                    let (first, last) = set.split_once(':').unwrap_or((set, set));
+                    (first.parse().unwrap()..=last.parse().unwrap()).collect()
+                };
+                for uid in &ids {
+                    response.push_str(&if dated {
+                        format!("* {uid} FETCH (UID {uid} INTERNALDATE \"21-Sep-2026 12:00:00 +0000\")\r\n")
+                    } else {
+                        format!("* {uid} FETCH (UID {uid})\r\n")
+                    });
+                }
+                response.push_str("O1 OK fetched\r\n");
+                // The snapshot, then one date window per 4 096 UIDs.
+                dated && ids.last() == Some(&9000)
+            } else {
+                panic!("unexpected command: {request}");
+            };
+            write(&mut w, response.as_bytes()).await.unwrap();
+            if last {
+                break;
+            }
+        }
+        replies
+    });
+    let mut p = params(port);
+    p["query"] = json!("folder:INBOX");
+    p["limit"] = json!(3);
+    let listed = super::super::call("imap.list", &p).await.unwrap();
+    assert_eq!(
+        listed["page"]["ids"],
+        json!(["9000:INBOX", "8999:INBOX", "8998:INBOX"])
+    );
+    let replies = peer.await.unwrap();
+    assert!(replies >= 9, "the conversation has to be the long one");
+    assert!(
+        SLOW * replies > Duration::from_secs(22),
+        "the test only means something while the conversation outlasts the budget it replaced"
+    );
+}
+/// The other half of the same budget: a server that takes a command and then
+/// says nothing is a hang, and it has to end the call long before the whole
+/// conversation's allowance would. Thirty real seconds, for the reason above.
+#[tokio::test]
+async fn a_command_that_is_never_answered_ends_the_call() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let peer = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut w: Wire = BufReader::new(Box::new(stream));
+        write(&mut w, b"* OK ready\r\n").await.unwrap();
+        assert!(line(&mut w).await.unwrap().starts_with(b"O1 LOGIN"));
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+    });
+    assert_eq!(
+        super::super::call("imap.list", &params(port)).await,
+        Err("request_timed_out")
+    );
+    peer.abort();
 }
 
 /// Serve mailbox discovery, then refuse the SELECT. The refusal drops the

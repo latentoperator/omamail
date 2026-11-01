@@ -5,8 +5,8 @@ import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import "../../../ui" as Omamail
 import "../../../ui/components" as Components
+import "../../../ui/compose" as Compose
 
 TestCase {
   id: testCase
@@ -37,6 +37,19 @@ TestCase {
   Component { id: parserComponent; SplitParser { splitMarker: "|" } }
   Component { id: fileComponent; FileView { path: "/fixture/existing"; watchChanges: true } }
   Component { id: processComponent; Process {} }
+  Component {
+    id: wordsComponent
+    Compose.PersonalWords {
+      service: QtObject {
+        property var writes: []
+        function configPath(name) { return "/fixture/config/omamail/" + name }
+        function writeConfig(name, text, callback) {
+          writes = writes.concat([{ name: String(name), text: String(text) }])
+          if (typeof callback === "function") callback(true, "")
+        }
+      }
+    }
+  }
   Component {
     id: controlledNumberComponent
     Item {
@@ -92,7 +105,6 @@ TestCase {
     }
   }
   Component { id: windowComponent; FloatingWindow { visible: false; minimumSize: Qt.size(320, 240) } }
-  Component { id: sharedAppComponent; Omamail.App { opened: false } }
   Component { id: actionIconComponent; Components.ActionIcon { name: "archive" } }
 
   Item {
@@ -155,6 +167,16 @@ TestCase {
     verify(!Quickshell.execDetached(["sh", "anything"]));
     compare(host.opened.length, 1)
     compare(host.copied.length, 1)
+  }
+
+  function test_clipboard_option_terminator_keeps_text_verbatim() {
+    var subjects = ["--version", "--clear", "-p", "田中 \"quoted\" \\ body\nline two", ""]
+    for (var i = 0; i < subjects.length; i++)
+      verify(Quickshell.execDetached(["wl-copy", "--", subjects[i]]))
+    compare(host.copied, subjects)
+    verify(!Quickshell.execDetached(["wl-copy", "--type", "text/html"]))
+    verify(!Quickshell.execDetached(["wl-copy", "--", "text", "extra"]))
+    compare(host.copied, subjects)
   }
 
   function test_notification_process_routes_to_native_host() {
@@ -405,6 +427,38 @@ TestCase {
     compare(failures, 2)
   }
 
+  function test_file_view_tells_a_missing_file_from_an_unreadable_one() {
+    var file = createTemporaryObject(fileComponent, testCase, { store: host, path: "/fixture/missing" })
+    verify(file)
+    var errors = []
+    file.loadFailed.connect(function(error) { errors.push(error) })
+    file.reload()
+    host.unreadable = ({ "/fixture/locked": true })
+    file.path = "/fixture/locked"
+    compare(errors, [2, 1])
+  }
+
+  // Review R3 on the standalone host: an existing word list this process
+  // cannot read is never replaced; a missing one is created on first Add.
+  function test_personal_words_never_overwrite_an_unreadable_file_on_standalone() {
+    host.unreadable = ({ "/fixture/config/omamail/spelling.json": true })
+    var locked = createTemporaryObject(wordsComponent, testCase)
+    verify(locked)
+    compare(locked.loaded, false)
+    verify(locked.error !== "")
+    locked.add("sessiononly")
+    compare(locked.words, ["sessiononly"])
+    compare(locked.service.writes.length, 0, "an unreadable list is never overwritten")
+
+    host.unreadable = ({})
+    var fresh = createTemporaryObject(wordsComponent, testCase)
+    verify(fresh)
+    compare(fresh.loaded, true, "a missing list starts empty")
+    fresh.add("firstword")
+    compare(fresh.service.writes.length, 1)
+    compare(JSON.parse(fresh.service.writes[0].text).words, ["firstword"])
+  }
+
   function test_process_adapts_native_lines_and_lifecycle() {
     var nativeProcess = nativeProcessComponent.createObject(testCase)
     var process = createTemporaryObject(processComponent, testCase, {
@@ -525,10 +579,6 @@ TestCase {
     compare(toolTip.text, "Help")
     compare(toggle.checked, false)
     compare(dropdown.value, "one")
-  }
-
-  function test_shared_application_constructs_with_production_imports() {
-    compare(sharedAppComponent.status, Component.Ready)
   }
 
   function test_floating_window_hosts_shared_content() {

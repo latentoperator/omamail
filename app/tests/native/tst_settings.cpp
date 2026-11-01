@@ -2,6 +2,7 @@
 #include "file_store.h"
 
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QSignalSpy>
@@ -22,6 +23,7 @@ private slots:
     void acceptsSpellingSettings();
     void invalidJsonIsPreserved();
     void rejectsCredentialAndUnknownFields();
+    void acceptsTheSettingsServiceSends();
     void fileStoreReadsWritesAndWatches();
     void fileStoreWriteOutlastsABriefShareLock();
     void watchReportsExternalCreation();
@@ -74,6 +76,20 @@ void SettingsTest::acceptsSpellingSettings()
     QVERIFY2(store.replace(settings, &error), qPrintable(error));
     QCOMPARE(store.load(&error), settings);
     QVERIFY(error.isEmpty());
+    auto systemLanguage = settings;
+    systemLanguage[QStringLiteral("spellingLanguage")] = QString();
+    QVERIFY2(store.replace(systemLanguage, &error), qPrintable(error));
+    QCOMPARE(store.load(&error), systemLanguage);
+
+    QFile saved(path);
+    QVERIFY(saved.open(QIODevice::ReadOnly));
+    const QByteArray original = saved.readAll();
+    saved.close();
+    auto unreviewed = systemLanguage;
+    unreviewed[QStringLiteral("unreviewedSpellingSetting")] = true;
+    QVERIFY(!store.replace(unreviewed, &error));
+    QVERIFY(saved.open(QIODevice::ReadOnly));
+    QCOMPARE(saved.readAll(), original); // refusal must not modify the saved settings
 }
 
 void SettingsTest::invalidJsonIsPreserved()
@@ -104,6 +120,32 @@ void SettingsTest::rejectsCredentialAndUnknownFields()
     QVERIFY(!QFile::exists(path));
     QVERIFY(!store.replace({{QStringLiteral("futureUnreviewedField"), true}}, &error));
     QVERIFY(!QFile::exists(path));
+}
+
+// Service.persistSetting() always sends its whole settings map, so one refused
+// key loses every change. These are its defaultSettingValues plus the values
+// it saves without a default.
+void SettingsTest::acceptsTheSettingsServiceSends()
+{
+    QTemporaryDir directory;
+    SettingsStore store(directory.filePath(QStringLiteral("settings.json")));
+    const QVariantMap sent{
+        {QStringLiteral("refreshIntervalSec"), 120}, {QStringLiteral("maxMessages"), 50},
+        {QStringLiteral("heavyMessageRendering"), QStringLiteral("Show plain text first")},
+        {QStringLiteral("contentDirection"), QStringLiteral("Auto")},
+        {QStringLiteral("appearance"), QStringLiteral("Auto")},
+        {QStringLiteral("defaultQuery"), QStringLiteral("in:inbox")},
+        {QStringLiteral("notifyNewMail"), QStringLiteral("On")}, {QStringLiteral("oauthPort"), 9481},
+        {QStringLiteral("undoSendSeconds"), 10}, {QStringLiteral("unifiedCalendarView"), false},
+        {QStringLiteral("calendarRemindersEnabled"), true},
+        {QStringLiteral("calendarSnoozeMinutes"), 5}, {QStringLiteral("showBarIcon"), true},
+        {QStringLiteral("unifiedMailboxes"), false}, {QStringLiteral("suggestEvents"), false},
+        {QStringLiteral("aiAgent"), QStringLiteral("System default")},
+        {QStringLiteral("aiModel"), QString()}, {QStringLiteral("calendarHourHeight"), 40},
+        {QStringLiteral("invitationCalendars"), QVariantMap{}}, {QStringLiteral("aiChatResetAt"), 1}};
+    QString error;
+    QVERIFY2(store.replace(sent, &error), qPrintable(error));
+    QCOMPARE(store.load(&error).value(QStringLiteral("calendarHourHeight")).toInt(), 40);
 }
 
 void SettingsTest::fileStoreReadsWritesAndWatches()
@@ -274,9 +316,17 @@ void SettingsTest::watchSettlesAfterDirectoryMutation()
     QVERIFY(QFile::setPermissions(present, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
 #endif
     QTRY_VERIFY_WITH_TIMEOUT(!changed.isEmpty(), 2000);
-    QTest::qWait(500);
-    const int settled = changed.count();
-    QTest::qWait(1000);
+    // FSEvents delivers these three mutations in as many batches as it
+    // likes, and a busy runner can space them well apart. Wait for a quiet
+    // second rather than assuming when the last one lands; the loop never
+    // went quiet.
+    QElapsedTimer settling;
+    settling.start();
+    int settled = -1;
+    while (settled != changed.count() && settling.elapsed() < 10000) {
+        settled = changed.count();
+        QTest::qWait(1000);
+    }
     QCOMPARE(changed.count(), settled);
     // A handful for two coalesced events over two watched paths; the loop
     // produced hundreds and was still going.

@@ -9,21 +9,21 @@ const keymap = load("keys/Keymap.js")
 const contract = JSON.parse(fs.readFileSync(path.join(__dirname, "../../backend-api.json")))
 
 function backend(apiVersion, methods, ready = true) {
-  return { ready, protocolInfo: { apiVersion, protocol: 1, version: "0.10.8", methods } }
+  return { ready, protocolInfo: { apiVersion, protocol: 1, version: "0.11.3", methods } }
 }
-assert.strictEqual(compatibility.accepts(backend(6, []).protocolInfo, "0.10.8", 6, 7), true,
+assert.strictEqual(compatibility.accepts(backend(9, []).protocolInfo, "0.11.3", 9, 10), true,
   "the released binary remains compatible with this checkout")
-assert.strictEqual(compatibility.accepts(backend(7, []).protocolInfo, "0.10.8", 6, 7), true)
-assert.strictEqual(contract.apiVersion, 7)
-assert.strictEqual(contract.releasedApiVersion, 6)
+assert.strictEqual(compatibility.accepts(backend(10, []).protocolInfo, "0.11.3", 9, 10), true)
+assert.strictEqual(contract.apiVersion, 10)
+assert.strictEqual(contract.releasedApiVersion, 9)
 assert.deepStrictEqual(contract.unreleased.methods, ["mail.exportEml"])
-assert.strictEqual(actions.backendCanExportEml(backend(6, ["mail.exportEml"])), false,
-  "API 7 is the fixed minimum even if an older backend advertises the method")
-assert.strictEqual(actions.backendCanExportEml(backend(6, ["mail.read"])), false)
-assert.strictEqual(actions.backendCanExportEml(backend(7, ["mail.read"])), false)
-assert.strictEqual(actions.backendCanExportEml(backend(7, ["mail.exportEml"], false)), false)
+assert.strictEqual(actions.backendCanExportEml(backend(9, ["mail.exportEml"])), false,
+  "API 10 is the fixed minimum even if an older backend advertises the method")
+assert.strictEqual(actions.backendCanExportEml(backend(9, ["mail.read"])), false)
+assert.strictEqual(actions.backendCanExportEml(backend(10, ["mail.read"])), false)
+assert.strictEqual(actions.backendCanExportEml(backend(10, ["mail.exportEml"], false)), false)
 assert.strictEqual(actions.backendCanExportEml(null), false)
-for (const api of [7, 8])
+for (const api of [10, 11])
   assert.strictEqual(actions.backendCanExportEml(backend(api, ["mail.exportEml"])), true,
     "the export gate survives release and subsequent revisions")
 assert.deepStrictEqual(JSON.parse(JSON.stringify(compatibility.unreleasedRefusal(
@@ -49,13 +49,13 @@ const service = { current: ada, unified: false, selectedId: "17:INBOX",
   hostForId: id => service.unified ? service.findAccount(String(id).split("/")[0]) : service.current,
   sourceIdFor: id => service.unified ? String(id).split("/")[1] : id }
 service.canExportEmlFor = id => actions.canExportEmlFor(service, id)
-for (const api of [6, 7]) {
-  service.backendCanExportEml = actions.backendCanExportEml(backend(api, api === 7 ? ["mail.exportEml"] : ["mail.read"]))
-  assert.strictEqual(actions.hiddenBindings(service, "list", "42:INBOX").includes("exportEml"), api === 6)
-  assert.strictEqual(actions.canExportEmlFor(service, "42:INBOX"), api === 7)
-  assert.strictEqual(actions.exportFromView(service, "list", "42:INBOX"), api === 7)
-  assert.strictEqual(dispatched.length, api === 7 ? 1 : 0,
-    "API 6 must refuse before provider work is dispatched")
+for (const api of [9, 10]) {
+  service.backendCanExportEml = actions.backendCanExportEml(backend(api, api === 10 ? ["mail.exportEml"] : ["mail.read"]))
+  assert.strictEqual(actions.hiddenBindings(service, "list", "42:INBOX").includes("exportEml"), api === 9)
+  assert.strictEqual(actions.canExportEmlFor(service, "42:INBOX"), api === 10)
+  assert.strictEqual(actions.exportFromView(service, "list", "42:INBOX"), api === 10)
+  assert.strictEqual(dispatched.length, api === 10 ? 1 : 0,
+    "API 9 must refuse before provider work is dispatched")
 }
 assert.deepStrictEqual(dispatched.pop(), { account: ada.accountId, id: "42:INBOX" })
 assert.strictEqual(actions.exportFromView(service, "reader", "42:INBOX"), true)
@@ -102,9 +102,8 @@ const plugin = { current: desk, unified: false, standalone: false, selectedId: "
   backendCanExportEml: true, failures: [], fail: text => plugin.failures.push(text),
   findAccount: id => id === desk.accountId ? desk : null,
   hostForId: () => plugin.current, sourceIdFor: id => id,
-  chooseFolder: done => { done(chooserAnswer); return true } }
+  chooseFiles: (done, folder) => { assert.strictEqual(folder, true); done(chooserAnswer); return true } }
 plugin.canExportEmlFor = id => actions.canExportEmlFor(plugin, id)
-assert.strictEqual(actions.canChooseEmlFolder(plugin, "9:INBOX"), true)
 chooserAnswer = { ok: true, paths: ["/home/ada/Mail archive"] }
 assert.strictEqual(actions.exportEmlToFolder(plugin, desk.accountId, "9:INBOX"), true)
 assert.deepStrictEqual(folderCalls.pop(), { id: "9:INBOX", directory: "/home/ada/Mail archive" })
@@ -117,15 +116,14 @@ actions.exportEmlToFolder(plugin, desk.accountId, "9:INBOX")
 assert.deepStrictEqual(plugin.failures, ["No folder picker is available"])
 // An account switch while the chooser was open refuses, as a stale menu does.
 chooserAnswer = { ok: true, paths: ["/home/ada/Mail archive"] }
-plugin.chooseFolder = done => { plugin.current = bob; done(chooserAnswer); return true }
+plugin.chooseFiles = done => { plugin.current = bob; done(chooserAnswer); return true }
 plugin.findAccount = id => [desk, bob].find(a => a.accountId === id) || null
 actions.exportEmlToFolder(plugin, desk.accountId, "9:INBOX")
 assert.strictEqual(folderCalls.length, 0, "the folder answer cannot reach another mailbox")
 plugin.current = desk
 plugin.standalone = true
-assert.strictEqual(actions.canChooseEmlFolder(plugin, "9:INBOX"), false,
+assert.strictEqual(actions.exportEmlToFolder(plugin, desk.accountId, "9:INBOX"), false,
   "the standalone app has no out-of-process chooser")
-assert.strictEqual(actions.exportEmlToFolder(plugin, desk.accountId, "9:INBOX"), false)
 plugin.standalone = false
 plugin.backendCanExportEml = false
 assert.strictEqual(actions.exportEmlToFolder(plugin, desk.accountId, "9:INBOX"), false,

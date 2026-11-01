@@ -62,18 +62,16 @@ function exportEmlFor(service, accountId, id, directory) {
   return owner.exportEml(target, directory)
 }
 // The same export into a folder the user picks first. Only the desktop plugin
-// has the out-of-process chooser. The boundary above runs again once the
-// chooser answers, so an account switch while it was open still refuses.
-function canChooseEmlFolder(service, id) {
-  return !!service && !service.standalone && canExportEmlFor(service, id)
-}
+// has the out-of-process chooser, so callers offer it where `standalone` is
+// false. The boundary above runs again once the chooser answers, so an
+// account switch while it was open still refuses.
 function exportEmlToFolder(service, accountId, id) {
   if (String(id || "") === "" || !service || service.standalone || !service.backendCanExportEml) return false
-  return service.chooseFolder(function(answer) {
+  return service.chooseFiles(function(answer) {
     var folder = answer && answer.ok && answer.paths ? String(answer.paths[0] || "") : ""
     if (folder !== "") exportEmlFor(service, accountId, id, folder)
     else if (answer && answer.error !== "cancelled") service.fail(String(answer.error || "No folder picker is available"))
-  })
+  }, true)
 }
 function exportEml(service, id) {
   if (!canExportEmlFor(service, id)) {
@@ -96,16 +94,6 @@ function markAllRead(service) {
     return
   }
   service.eachHost(function(host) { host.markAllRead() })
-}
-// Several ticked rows at once. A merged list draws rows from several
-// mailboxes, and a batch is one mailbox's request, so it is refused there
-// the way a move is: the rule every unavailable action follows.
-function actMany(service, ids, action) {
-  if (service.unified) {
-    service.fail("Acting on several messages needs one mailbox on screen")
-    return false
-  }
-  return service.current ? service.current.actMany(ids, action) : false
 }
 
 // What the status line says once the file exists. The backend answers with
@@ -150,11 +138,11 @@ function exportErrorText(error, directory) {
   return EXPORT_ERRORS.hasOwnProperty(code) ? EXPORT_ERRORS[code] : "Could not save the message as .eml"
 }
 
-// API 7 introduced export. Keep the fixed revision and advertised method
+// API 10 introduced export here (upstream folded 7-9 for other work). Keep the fixed revision and advertised method
 // checks after release, and refuse a handshake that is not ready.
 function backendCanExportEml(backend) {
   var info = backend ? backend.protocolInfo : null
-  return !!backend && backend.ready === true && !!info && info.apiVersion >= 7
+  return !!backend && backend.ready === true && !!info && info.apiVersion >= 10
     && Array.isArray(info.methods) && info.methods.indexOf("mail.exportEml") >= 0
 }
 
@@ -163,6 +151,49 @@ function hiddenBindings(service, view, cursorId) {
   var hidden = service && service.hasAgent === false
     ? ["askAgent", "assistantSend", "assistantChooseCommand", "assistantCommandNext", "assistantCommandPrevious"] : []
   var id = view === "reader" && service && service.selectedId !== "" ? service.selectedId : cursorId
-  if (!service || !service.canExportEmlFor(id)) hidden.push("exportEml")
+  if (!service || typeof service.canExportEmlFor !== "function" || !service.canExportEmlFor(id))
+    hidden.push("exportEml")
   return hidden
+}
+
+// One mailbox's export, run on behalf of MailAccount. One request per mailbox
+// at a time; the notice names the file the backend actually wrote.
+function accountSubject(account, id) {
+  var rows = account.messages || []
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i].id) === String(id)) return String(rows[i].subject || "")
+  }
+  return ""
+}
+function accountExport(account, id, directory) {
+  var target = String(id || "")
+  var folder = String(directory || "")
+  if (!account.ready || !account.backend || target === "") return false
+  if (!account.canExportEml) {
+    account.fail("This mailbox cannot save messages as .eml")
+    return false
+  }
+  if (account.exportingEml) {
+    account.note("Already saving a message as .eml")
+    return false
+  }
+  account.clearNotice()
+  var subject = accountSubject(account, target)
+  var parameters = {account: account.accountId, id: target, suggestedName: subject}
+  if (folder !== "") parameters.directory = folder
+  account.exportingEml = true
+  account.exportingEmlId = target
+  // The busy state is visible from the moment the work starts.
+  account.note("Saving " + (subject || "message") + " as .eml…")
+  account.backend.call("mail.exportEml", parameters, function(result, error) {
+    account.exportingEml = false
+    account.exportingEmlId = ""
+    if (error) {
+      account.fail(exportErrorText(error, folder))
+      return
+    }
+    account.note(exportSavedNotice(result))
+    account.emlSaved(result)
+  })
+  return true
 }

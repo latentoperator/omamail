@@ -1,7 +1,10 @@
 import QtQuick 2.15
 import QtTest 1.3
 import "../.." as Omamail
+import "../../components" as Components
 import "../../account/Unified.js" as Unified
+import "../../compose/Spelling.js" as Spelling
+import "../../bar/Bridge.js" as BarBridge
 
 Item {
   width: 400
@@ -52,6 +55,18 @@ Item {
     id: scopedMailService
     shell: shellStore
     manifest: ({ id: "omamail" })
+  }
+
+  Components.SettingsPage {
+    id: page
+    width: parent.width
+    service: mailService
+    calendarController: null
+    textColor: Qt.rgba(1, 1, 1, 1)
+    dimColor: Qt.rgba(0.6, 0.6, 0.6, 1)
+    accentColor: Qt.rgba(1, 0.5, 0, 1)
+    urgentColor: Qt.rgba(1, 0.5, 0, 1)
+    panelFontFamily: "sans"
   }
 
   TestCase {
@@ -113,6 +128,21 @@ Item {
       compare(shellStore.updatedId, "omamail")
       verify(shellStore.updatedEntry !== null)
       compare(shellStore.updatedEntry.unifiedCalendarView, true)
+    }
+
+    function test_zooming_the_calendar_reaches_the_shell_and_survives_a_restart() {
+      mailService.applySettings({})
+      shellStore.updatedEntry = null
+      mailService.calendarController.zoomHours(-1, 60, 0)
+      compare(mailService.calendarController.hourHeight, 55)
+      tryVerify(function() { return shellStore.updatedEntry !== null })
+      compare(shellStore.updatedEntry.calendarHourHeight, 55)
+      // What the shell hands back on the next start, directly and through a bar.
+      mailService.applySettings({})
+      compare(mailService.calendarController.hourHeight, 0)
+      mailService.applySettings(BarBridge.settings(shellStore.updatedEntry, mailService.defaultSettingValues))
+      compare(mailService.calendarController.hourHeight, 55)
+      mailService.applySettings({})
     }
 
     function test_ai_settings_reach_the_native_runner_and_preserve_other_preferences() {
@@ -192,22 +222,94 @@ Item {
 
     // ------------------------------------------------------------ spelling
 
-    function test_spelling_defaults_on_and_persists_changes() {
+    function test_spelling_defaults_off_and_persists_changes() {
       mailService.applySettings({})
+      compare(mailService.spellingEnabled, false)
+      compare(mailService.spellingStatus, "disabled")
+      compare(findChild(page, "spellingSwitch").checked, false)
+      compare(findChild(page, "spellingState").text, "Off")
+      compare(mailService.spellingLanguage, Spelling.resolveLanguage("", Qt.locale().name))
+      var policy = findChild(page, "spellingLanguagePolicy")
+      if (mailService.spellingLanguage !== "") {
+        compare(policy.text.indexOf("Checking spelling"), -1, "an off switch does not claim to be checking")
+        compare(policy.text, "When on, checks spelling in " + mailService.spellingLanguage + " (system language).")
+      }
+
+      mailService.setSpellingEnabled(true)
       compare(mailService.spellingEnabled, true)
-      compare(mailService.spellingLanguage, "en_US")
+      compare(shellStore.updatedEntry.spellingEnabled, true)
+      compare(findChild(page, "spellingSwitch").checked, true)
+      if (mailService.spellingLanguage !== "")
+        compare(policy.text, "Checking spelling in " + mailService.spellingLanguage + " (system language).")
 
       mailService.setSpellingEnabled(false)
       compare(mailService.spellingEnabled, false)
       compare(shellStore.updatedEntry.spellingEnabled, false)
 
-      // A stored value of another shape is not a decision to turn it off.
-      mailService.applySettings({ spellingEnabled: "no" })
-      compare(mailService.spellingEnabled, true)
+      // A stored value of another shape is not a decision to turn it on.
+      mailService.applySettings({ spellingEnabled: "yes" })
+      compare(mailService.spellingEnabled, false)
 
-      mailService.setSpellingLanguage("en_GB")
+      mailService.persistSetting("spellingLanguage", "en_GB")
       compare(mailService.spellingLanguage, "en_GB")
       compare(shellStore.updatedEntry.spellingLanguage, "en_GB")
+    }
+
+    function test_hostile_spelling_language_is_resolved_before_the_adapter() {
+      for (var i = 0; i < 5; i++) {
+        var values = ["../x", "en_US\n", "en_US\u0000", "éé", "x".repeat(500)]
+        mailService.applySettings({ spellingLanguage: values[i] })
+        compare(mailService.spellingLanguage, Spelling.resolveLanguage("", Qt.locale().name))
+      }
+      mailService.persistSetting("spellingLanguage", "")
+      compare(shellStore.updatedEntry.spellingLanguage, "")
+      compare(mailService.spellingLanguage, Spelling.resolveLanguage("", Qt.locale().name))
+    }
+
+    function test_spelling_setup_guidance_data() {
+      return [
+        { tag: "plugin-module", standalone: false, status: "no-module", enabled: true, message: "install the Sonnet QML module" },
+        { tag: "plugin-dictionary", standalone: false, status: "no-dictionary", enabled: true, message: "The en_US dictionary is not installed" },
+        { tag: "standalone-module", standalone: true, status: "no-module", enabled: true, message: "Spell-checking is not available in this build." },
+        { tag: "standalone-dictionary", standalone: true, status: "no-dictionary", enabled: true, message: "Spell-checking is not available in this build." },
+        { tag: "off", standalone: false, status: "disabled", enabled: false, message: "" },
+        { tag: "loading", standalone: false, status: "loading", enabled: true, message: "" }
+      ]
+    }
+    function test_spelling_setup_guidance(data) {
+      try {
+        page.service = { standalone: data.standalone, spellingEnabled: data.enabled,
+          spellingStatus: data.status, spellingAvailable: false, spellingLanguage: "en_US",
+          settings: { spellingLanguage: "en_US" }, accountSummaries: [] }
+        var notice = findChild(page, "spellingNeedsSetup")
+        compare(notice.visible, data.message !== "")
+        if (data.message !== "") verify(notice.text.indexOf(data.message) >= 0)
+      } finally { page.service = mailService }
+    }
+    function test_unset_system_language_guidance() {
+      if (Spelling.validLanguage(Qt.locale().name)) { skip("requires C/POSIX system locale"); return }
+      mailService.applySettings({ spellingEnabled: true, spellingLanguage: "" })
+      compare(mailService.spellingLanguage, "")
+      compare(findChild(page, "spellingLanguagePolicy").text,
+        "No system language is set; choose one with the spellingLanguage setting.")
+      compare(findChild(page, "spellingNeedsSetup").text.indexOf("The C dictionary"), -1)
+    }
+
+    function test_spelling_off_unloads_the_probe_and_hides_setup_warning() {
+      mailService.applySettings({ spellingEnabled: false })
+      compare(mailService.spellingStatus, "disabled")
+      compare(mailService.spellingAvailable, false)
+      var state = null
+      for (var i = 0; i < mailService.children.length; i++) {
+        if (mailService.children[i].enabledRequest !== undefined) state = mailService.children[i]
+      }
+      verify(state)
+      var probe = state.children[0]
+      compare(probe.active, false)
+      compare(probe.item, null)
+      compare(probe.status, Loader.Null)
+      compare(findChild(page, "spellingNeedsSetup").visible, false)
+      mailService.applySettings({})
     }
 
     function test_spelling_personal_words_add_remove_and_dedupe() {
@@ -296,9 +398,49 @@ Item {
       compare(configPlatform.confirm(0, true, ""), true)
     }
 
+    // An existing file that cannot be read must never be replaced: the store
+    // stays unloaded, keeps new words in memory only, and says why. A missing
+    // file (FileNotFound, 2) is the one failure that means "start empty".
+    function test_spelling_personal_words_never_overwrite_an_unreadable_file() {
+      var store = mailService.spellingWordStore
+      store.apply("")
+      configPlatform.writes = []
+      configPlatform.callbacks = []
+      store.loaded = false
+      store.pending = false
+      store.error = ""
+      store.readFailed(3)
+      compare(store.loaded, false)
+      verify(mailService.spellingPersonalWordsError !== "")
+      mailService.addPersonalWord("sessiononly")
+      verify(mailService.spellingPersonalWords.indexOf("sessiononly") >= 0)
+      compare(configPlatform.writes.length, 0, "an unreadable dictionary is never overwritten")
+
+      // A later successful load releases the queued write; let it finish
+      // before the missing-file half starts from a clean store.
+      store.merge('{"words":["existingword"]}')
+      compare(configPlatform.writes.length, 1, "a later readable load releases the queued write")
+      var written = JSON.parse(configPlatform.writes[0].text).words
+      verify(written.indexOf("existingword") >= 0, "the saved words survive")
+      verify(written.indexOf("sessiononly") >= 0, "and the session's word is kept")
+      compare(configPlatform.confirm(0, true, ""), true)
+      configPlatform.writes = []
+      configPlatform.callbacks = []
+      store.apply("")
+      store.loaded = false
+      store.pending = false
+      store.error = ""
+      store.readFailed(2)
+      compare(store.loaded, true, "a missing file starts an empty list")
+      mailService.addPersonalWord("firstword")
+      compare(configPlatform.writes.length, 1)
+      compare(configPlatform.confirm(0, true, ""), true)
+    }
+
     // The probe loads Sonnet through the same adapter the composer uses; it
     // settles into one concrete status on any machine rather than hanging.
     function test_spelling_availability_settles_to_a_known_status() {
+      mailService.applySettings({ spellingEnabled: true })
       tryVerify(function() {
         var status = mailService.spellingStatus
         return status === "ready" || status === "no-dictionary" || status === "no-module"
@@ -309,20 +451,21 @@ Item {
     // fallback: a missing language reads no-dictionary and setting it back
     // recovers.
     function test_spelling_availability_follows_the_requested_language() {
+      mailService.applySettings({ spellingEnabled: true })
       tryVerify(function() {
         var status = mailService.spellingStatus
         return status === "ready" || status === "no-dictionary" || status === "no-module"
       }, 3000)
       if (mailService.spellingStatus === "no-module") { skip("Sonnet is not installed"); return }
-      mailService.setSpellingLanguage("en_US")
+      mailService.persistSetting("spellingLanguage", "en_US")
       tryVerify(function() {
         return mailService.spellingStatus === "ready" || mailService.spellingStatus === "no-dictionary"
       }, 3000)
       if (!mailService.spellingAvailable) { skip("en_US dictionary is not installed"); return }
-      mailService.setSpellingLanguage("zz_ZZ")
+      mailService.persistSetting("spellingLanguage", "zz_ZZ")
       tryVerify(function() { return mailService.spellingStatus === "no-dictionary" }, 3000)
       compare(mailService.spellingAvailable, false)
-      mailService.setSpellingLanguage("en_US")
+      mailService.persistSetting("spellingLanguage", "en_US")
       tryVerify(function() { return mailService.spellingStatus === "ready" }, 3000)
     }
   }

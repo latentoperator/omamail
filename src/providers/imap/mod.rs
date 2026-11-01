@@ -20,6 +20,20 @@ use tokio_rustls::{
     rustls::{ClientConfig, RootCertStore, pki_types::ServerName},
 };
 const LIMIT: usize = 32 * 1024 * 1024;
+/// How long one reply may take: the command is written, then read to its
+/// tagged completion. A hang guard, not a speed test — a 4 096-UID date batch
+/// is a quarter of a megabyte, and a server that charges a second a round trip
+/// is still working.
+const COMMAND_BUDGET: Duration = Duration::from_secs(30);
+/// How long one `imap.*` call may take. A call is a conversation — connect,
+/// login, SELECT, then one command per 4 096-UID window — so its cost is the
+/// server's per-command cost multiplied by the mailbox's size. Yahoo charges
+/// roughly half a second per command and a 10 000-message INBOX costs nine of
+/// them; a loaded server multiplies that. The budget has to clear the honest
+/// worst case, because what it exists to stop is a call that never ends.
+/// `ui/backend/Backend.qml` holds the matching frame deadline, so the process
+/// is not killed while a slow server is still answering.
+const CALL_BUDGET: Duration = Duration::from_secs(120);
 type Result<T> = std::result::Result<T, &'static str>;
 trait Socket: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Socket for T {}
@@ -134,11 +148,28 @@ async fn response_limited(
     .await?;
     Ok(out)
 }
+/// Read one reply under `COMMAND_BUDGET`: a server that takes a command and
+/// then goes quiet fails the call here, rather than holding it until the
+/// conversation as a whole runs out of time.
+async fn response_each(
+    w: &mut Wire,
+    tag: &str,
+    continuation: bool,
+    literal_cap: usize,
+    visit: impl FnMut(&[u8]) -> Result<()>,
+) -> Result<()> {
+    tokio::time::timeout(
+        COMMAND_BUDGET,
+        records(w, tag, continuation, literal_cap, visit),
+    )
+    .await
+    .unwrap_or(Err("request_timed_out"))
+}
 /// Visit complete IMAP response records, keeping literals attached to their
 /// protocol record. UID inventories can retain only numbers instead of a full
 /// response and a second, much larger parsed syntax tree. `literal_cap` bounds
 /// any single announced literal on top of the whole-response `LIMIT`.
-async fn response_each(
+async fn records(
     w: &mut Wire,
     tag: &str,
     continuation: bool,
@@ -411,7 +442,7 @@ pub(crate) async fn planned_action_availability(
     account: &str,
     refusals: Value,
 ) -> Result<crate::mail::action::ActionAvailability> {
-    tokio::time::timeout(Duration::from_secs(22), async {
+    tokio::time::timeout(CALL_BUDGET, async {
         let params = resolve_account(
             &json!({"accountId":account,"readOnly":true}),
             "imap.folders",
@@ -459,7 +490,7 @@ pub(crate) async fn execute_planned_action(
         })
         .collect::<Result<_>>()?;
     let mut completed = Vec::new();
-    let result = tokio::time::timeout(Duration::from_secs(22), async {
+    let result = tokio::time::timeout(CALL_BUDGET, async {
         let params = resolve_account(params, method).await?;
         credentials(&params)?;
         mutation::call_planned(
@@ -507,7 +538,7 @@ pub async fn call(method: &str, p: &Value) -> Result<Value> {
 }
 async fn call_inner(method: &str, p: &Value) -> Result<Value> {
     let sent = std::sync::atomic::AtomicBool::new(false);
-    match tokio::time::timeout(Duration::from_secs(22), async {
+    match tokio::time::timeout(CALL_BUDGET, async {
         let resolved = resolve_account(p, method).await?;
         execute(method, &resolved, &sent).await
     })

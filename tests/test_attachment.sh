@@ -219,8 +219,9 @@ answer=$(sh "$script" pick)
 check "a cancelled picker is cancelled, not an error" "$(json_field error "$answer")" "cancelled"
 unset OMAMAIL_PICK_OUT OMAMAIL_PICK_EXIT
 
-# A folder for Save as .eml: the chooser is asked for a directory, and only
-# its first absolute answer is returned.
+# A folder for Save as .eml: the chooser is asked for a directory, and exactly
+# one absolute answer is returned. Two lines are refused, never truncated:
+# the second may be part of a folder name with a line break in it.
 cat > "$work/bin/omarchy-file-select" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$*" > "$OMAMAIL_PICK_ARGS"
@@ -229,12 +230,15 @@ exit "${OMAMAIL_PICK_EXIT:-0}"
 STUB
 chmod +x "$work/bin/omarchy-file-select"
 OMAMAIL_PICK_ARGS=$work/pick-args
-OMAMAIL_PICK_OUT=$(printf '%s\n' "/home/ada/Mail archive" /home/ada/other)
+OMAMAIL_PICK_OUT="/home/ada/Mail archive"
 export OMAMAIL_PICK_ARGS OMAMAIL_PICK_OUT
 answer=$(sh "$script" folder)
 check "folder says ok" "$(json_field ok "$answer")" "True"
 picked=$(printf '%s' "$answer" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["paths"]))')
-check "folder returns only the first folder" "$picked" "/home/ada/Mail archive"
+check "folder returns the chosen folder" "$picked" "/home/ada/Mail archive"
+OMAMAIL_PICK_OUT=$(printf '%s\n' "/home/ada/Mail archive" /home/ada/other)
+answer=$(sh "$script" folder)
+check "two lines are refused, not truncated" "$(json_field ok "$answer")" "False"
 case "$(cat "$OMAMAIL_PICK_ARGS")" in
   *--directory*) ok "folder asks the chooser for a directory" ;;
   *) bad "folder asks the chooser for a directory" ;;

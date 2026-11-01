@@ -71,12 +71,18 @@ Rectangle {
   readonly property real chromeWidth: mark.width + openButton.width + closeButton.width
     + content.spacing * 3 + Style.space(18)
 
-  // Placed by itself, over the status line's right end where the draft and
-  // send toasts sit, because the window file has no room left to spare.
+  // How much of the window's foot is taken above the status line: the
+  // reader's toolbar while a message is open. The card is raised past it,
+  // because that toolbar's right end holds the very save button that brought
+  // the card up, and a notice must not cover the control it reports on.
+  property real clearance: 0
+
+  // Placed by itself, at the right end where the draft and send toasts sit,
+  // because the window file has no room left to spare.
   anchors.right: parent ? parent.right : undefined
   anchors.rightMargin: Style.space(16)
   anchors.bottom: parent ? parent.bottom : undefined
-  anchors.bottomMargin: Style.space(28) + Style.space(12)
+  anchors.bottomMargin: Style.space(28) + Math.max(0, clearance) + Style.space(12)
   z: 80
   visible: shown
   implicitWidth: Math.min(maximumWidth,

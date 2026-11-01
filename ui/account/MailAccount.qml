@@ -12,10 +12,12 @@ import "../message/Unsubscribe.js" as Unsub
 import "../message/Outbox.js" as Outbox
 import "Model.js" as Model
 import "Accounts.js" as Accounts
+import "Aliases.js" as Aliases
 import "MessageActions.js" as MessageActions
 import "../providers/Registry.js" as Provider
 import "../providers/ImapProtocol.js" as Imap
 import "../providers/OAuth.js" as OAuth
+import "../backend/Plain.js" as Plain
 
 // One mailbox: its sign-in, its cache, its messages. Service.qml owns a set of
 // these and puts whichever is on screen in front of the views.
@@ -53,6 +55,8 @@ Item {
   // Server settings for an IMAP account, straight off the account entry. Unused
   // by the others, and normalised before anything can dial one.
   property var imapSettings: null
+  // The account's sender name, for the providers whose From name it sets.
+  property string senderName: ""
   // The same for a JMAP account, and the same rule: what is on the entry is
   // what a hand edit could have written, so it is normalised before anything
   // sends a credential to it.
@@ -133,8 +137,7 @@ Item {
   // to it, with the row already moved.
   readonly property bool canArchive: Provider.can(providerId, "archive", capabilityRefusals)
   readonly property bool canReportSpam: Provider.can(providerId, "spam", capabilityRefusals)
-  // The provider must own the native IMAP path. Whether the connected backend
-  // actually advertises the method is a connection fact, checked by the service.
+  // Provider ceiling only; the service checks the backend advertises it.
   readonly property bool canExportEml: Provider.can(providerId, "emlExport", capabilityRefusals)
   readonly property bool canStar: Provider.can(providerId, "star", capabilityRefusals)
   readonly property bool canMove: Provider.can(providerId, "move", capabilityRefusals)
@@ -235,7 +238,7 @@ Item {
         imageFetchQueue = []
         remoteImagesLoading = false
         imageBatchDirty = false
-        imagePaintTimer.stop()
+        stopImagePaint()
         remoteImageAttempted = ({})
         selectedDocument = null
         selectedReaderDocument = null
@@ -251,6 +254,11 @@ Item {
   property int imageFetchSerial: 0
   property var remoteImageAttempted: ({})
   property bool imageBatchDirty: false
+  // Repaint wait: starts short so the first pictures appear quickly, doubles
+  // after each repaint up to the cap, and starts over for each message.
+  readonly property int imagePaintMinWait: 100
+  readonly property int imagePaintMaxWait: 3000
+  property int imagePaintWait: imagePaintMinWait
   // Prepared remote bytes stay separate from the source body. Qt receives only
   // completed data URIs, never an address whose pending load would draw its
   // built-in broken placeholder or whose redirect could escape the URL gate.
@@ -401,9 +409,15 @@ Item {
   property var profile: null
   readonly property string accountEmail: profile ? String(profile.email || "") : ""
   readonly property var availableSendAsAliases: {
-    if (sendAsAliases.length > 0) return sendAsAliases
-    if (accountEmail === "") return []
-    return [{ email: accountEmail, displayName: "", isPrimary: true, isDefault: true }]
+    var rows = sendAsAliases.length > 0 ? sendAsAliases
+      : (accountEmail === "" ? []
+        : [{ email: accountEmail, displayName: "", isPrimary: true, isDefault: true }])
+    // Named here rather than in the provider's own list so that a rename
+    // shows in the composer at once, without reloading the send-as list.
+    // Only on a backend that names agent sends too (API 7), so the composer
+    // and `mail.send` never disagree about who a message is from.
+    var named = Accounts.namesSender(providerId) && !!backend && backend.ready && backend.apiVersion >= 7
+    return named ? Aliases.withSenderName(rows, senderName) : rows
   }
   // The address this mailbox answers as when nothing more specific applies.
   // The profile is authoritative once it has loaded; until then the address the
@@ -434,6 +448,7 @@ Item {
   property string pendingActionQuery: ""
   property var deferredListLoad: null
   property var queuedActions: []
+  property var actionCompletions: []
   property bool sending: false
   readonly property alias sendQueue: sendQueue
   readonly property int sendPendingCount: sendQueue.parked.length
@@ -1289,7 +1304,7 @@ Item {
     remoteImageData = ({})
     remoteImageAttempted = ({})
     imageBatchDirty = false
-    imagePaintTimer.stop()
+    stopImagePaint()
     selectedRemoteImageSources = []
     imageFetchQueue = []
     imageFetchSerial++
@@ -1606,9 +1621,15 @@ Item {
     if (pending.length === 0) return
     imageFetchQueue = pending
     imageBatchDirty = false
+    imagePaintWait = imagePaintMinWait
     remoteImagesLoading = true
     imageFetchSerial++
     fetchNextImage(imageFetchSerial)
+  }
+
+  function stopImagePaint() {
+    imagePaintTimer.stop()
+    imagePaintWait = imagePaintMinWait
   }
 
   function flushRemoteImages() {
@@ -1621,7 +1642,7 @@ Item {
     if (serial !== imageFetchSerial) return
     if (imageFetchQueue.length === 0) {
       remoteImagesLoading = false
-      imagePaintTimer.stop()
+      stopImagePaint()
       flushRemoteImages()
       return
     }
@@ -1700,7 +1721,7 @@ Item {
     remoteImageData = ({})
     remoteImageAttempted = ({})
     imageBatchDirty = false
-    imagePaintTimer.stop()
+    stopImagePaint()
     selectedRemoteImageSources = []
     imageFetchQueue = []
     imageFetchSerial++
@@ -1731,12 +1752,12 @@ Item {
 
   // Network sends keep their order; native intent preparation proceeds while
   // a previous send is in flight, so a slow server never blocks the next edit.
-  function queueAction(messageId, action, actionQuery, quiet, memberOnly, dispatch, discard, token, sourceLabelId) {
+  function queueAction(messageId, action, actionQuery, quiet, memberOnly, dispatch, discard, token, sourceLabelId, independent) {
     var queued = queuedActions.slice()
     for (var i = queued.length - 1; i >= 0; i--) {
       var previous = queued[i]
       if (previous.id !== messageId) continue
-      if (previous.action === action && previous.cacheKey === actionQuery
+      if (!independent && previous.action === action && previous.cacheKey === actionQuery
           && previous.quiet === quiet && previous.memberOnly === memberOnly
           && previous.sourceLabelId === sourceLabelId) {
         discard(previous.token)
@@ -1793,9 +1814,18 @@ Item {
     return runNativeAction([String(id || "")], action, quiet === true, memberOnly === true, false)
   }
 
-  function runNativeAction(ids, action, quiet, memberOnly, allRead) {
+  function runNativeAction(ids, action, quiet, memberOnly, allRead, completion) {
     if (!ready || !backend || (!allRead && ids.length === 0) || (allRead && messages.length === 0)) return false
     if (refuseUnavailableAction(action)) return false
+    var reported = false
+    var cancel = function() { finish(ids, "Account signed out") }
+    function finish(failedIds, error) {
+      if (reported) return
+      reported = true
+      root.actionCompletions = root.actionCompletions.filter(function(callback) { return callback !== cancel })
+      if (typeof completion === "function") completion({failedIds: failedIds || [], error: String(error || "")})
+    }
+    if (typeof completion === "function") actionCompletions = actionCompletions.concat([cancel])
     var account = accountId
     var actionQuery = cacheKey
     var estimate = resultEstimate
@@ -1825,6 +1855,7 @@ Item {
       if (root.accountId === account && preparationEpoch === intents.epoch)
         root.actionPreparations = Math.max(0, root.actionPreparations - 1)
       if (error || !prepared) {
+        finish(ids, error || "Could not prepare the action")
         if (root.accountId === account && preparationEpoch === intents.epoch) {
           root.fail(error || "Could not prepare the action")
           if (root.actionPreparations === 0 && root.pendingAction === "") {
@@ -1836,6 +1867,7 @@ Item {
         return
       }
       if (prepared.refused) {
+        finish(ids, "This mailbox cannot perform that action")
         if (root.accountId === account && preparationEpoch === intents.epoch) {
           root.refuseUnavailableAction(action)
           if (root.actionPreparations === 0 && root.pendingAction === "") {
@@ -1847,8 +1879,9 @@ Item {
       }
       var targets = prepared.targets || []
       var rows = prepared.rows || []
-      if (targets.length === 0) return
+      if (targets.length === 0) { finish(ids, "Those messages are no longer available"); return }
       if (root.accountId !== account || !root.ready || intents.generation !== prepared.generation) {
+        finish(ids, "Account changed")
         intents.settle(account, actionQuery, prepared.token, rows, function() {}, prepared.generation)
         return
       }
@@ -1860,7 +1893,10 @@ Item {
       function done(payload, failure, failedIds) {
         var failed = failure ? (Array.isArray(failedIds) ? failedIds : rows) : []
         intents.settle(account, actionQuery, prepared.token, failed, function(settled, settleError) {
-          if (root.accountId !== account || intents.generation !== prepared.generation) return
+          if (root.accountId !== account || intents.generation !== prepared.generation) {
+            finish(ids, "Account changed")
+            return
+          }
           root.pendingAction = ""
           root.pendingActionQuery = ""
           var message = failure && Array.isArray(failedIds) && rows.length > 1
@@ -1882,6 +1918,7 @@ Item {
             else root.note(rows.length > 1 ? Model.batchNote(rows.length, root.actionLabel(action)) : root.actionLabel(action))
           }
           root.refreshCounts()
+          finish(settleError ? ids : failed, message)
           root.runQueuedAction()
           if (root.resumeDeferredListLoad(actionQuery, message)) return
           if (root.cacheKey === actionQuery && (interrupted || invalidates || message !== ""))
@@ -1919,7 +1956,7 @@ Item {
       }
       if (root.pendingAction !== "") root.queueAction(ids.join(","), action, actionQuery, quiet, memberOnly, dispatch, function(intoToken) {
         intents.coalesce(account, actionQuery, prepared.token, intoToken, prepared.generation)
-      }, prepared.token, parameters.sourceLabelId)
+      }, prepared.token, parameters.sourceLabelId, typeof completion === "function")
       else dispatch()
     })
     return true
@@ -1998,56 +2035,14 @@ Item {
     return runNativeAction([], "markRead", false, false, true)
   }
 
-  // Save the message's original bytes as .eml in Downloads, or in a folder
-  // the user picked. One request per
-  // mailbox at a time, and the notice names the file the backend actually
-  // wrote. The id is this mailbox's own, resolved by the service.
+  // Save the message's original bytes as .eml; MessageActions.accountExport
+  // does the work so this file stays under the repository's size ceiling.
   property bool exportingEml: false
   property string exportingEmlId: ""
-
-  function subjectForEml(id) {
-    for (var i = 0; i < messages.length; i++) {
-      if (String(messages[i].id) === String(id)) return String(messages[i].subject || "")
-    }
-    return ""
-  }
-
   signal emlSaved(var result)
+  function exportEml(id, directory) { return MessageActions.accountExport(root, id, directory) }
 
-  function exportEml(id, directory) {
-    var target = String(id || "")
-    var folder = String(directory || "")
-    if (!ready || !backend || target === "") return false
-    if (!canExportEml) {
-      fail("This mailbox cannot save messages as .eml")
-      return false
-    }
-    if (exportingEml) {
-      note("Already saving a message as .eml")
-      return false
-    }
-    clearNotice()
-    var parameters = {account: accountId, id: target, suggestedName: subjectForEml(target)}
-    if (folder !== "") parameters.directory = folder
-    exportingEml = true
-    exportingEmlId = target
-    // The busy state is visible from the moment the work starts, not only when
-    // a duplicate is refused or the file lands.
-    note("Saving " + (subjectForEml(target) || "message") + " as .eml…")
-    backend.call("mail.exportEml", parameters, function(result, error) {
-      root.exportingEml = false
-      root.exportingEmlId = ""
-      if (error) {
-        root.fail(MessageActions.exportErrorText(error, folder))
-        return
-      }
-      root.note(MessageActions.exportSavedNotice(result))
-      root.emlSaved(result)
-    })
-    return true
-  }
-
-  function actMany(ids, action) { return batchAction.run(ids, action) }
+  function actMany(ids, action, completion) { return batchAction.run(ids, action, completion) }
 
   BatchAction {
     id: batchAction
@@ -2221,6 +2216,7 @@ Item {
   // guards are reachable and not only the transport's own error.
   function reportSendFailure(error, sendId) {
     fail(error)
+    draftList.reload()
     // A zero-delay send can be rejected synchronously by a provider before
     // ComposeView has returned from service.send() and parked its accepted
     // draft. Cross the event-loop boundary so every terminal signal observes
@@ -2244,13 +2240,11 @@ Item {
   }
 
   function sentDraftRemoved(draftId) {
-    if (Model.indexById(messages, draftId) >= 0) {
-      messages = Model.removeById(messages, draftId)
-      rememberList()
-    }
-    if (selectedId === draftId) clearSelection()
+    draftList.drop(draftId, cacheKey)
     refreshCounts()
   }
+
+  function draftKept() { draftList.reload() }
 
   function deliverPending() { return sendQueue.deliverAll() }
 
@@ -2258,6 +2252,11 @@ Item {
 
   SendQueue {
     id: sendQueue
+    account: root
+  }
+
+  DraftList {
+    id: draftList
     account: root
   }
 
@@ -2330,18 +2329,13 @@ Item {
       }
       var child = root.api.saveDraft(payload, function(saved, error) {
       if (handle.aborted || account !== root.accountId) return
+      if (!error) draftList.saved(composeFields.draftId)
       if (typeof callback === "function") callback(saved, error)
       // The Drafts list on screen is what the server had before the save: the
       // copy replaced is gone there and the new one is not yet listed, so
       // a list left as it was showed both — the old row until the next poll,
       // and a second row for every save. Read it again from the server now.
-      if (!error && root && root.mailboxKey === "drafts") {
-        root.listSerial++
-        root.nextPageToken = ""
-        root.loadMessages(false, true, "")
-      } else if (!error && root) {
-        root.refreshCounts()
-      }
+      if (!error && root && !draftList.reload()) root.refreshCounts()
       })
       if (child) handle.children.push(child)
     })
@@ -2417,6 +2411,7 @@ Item {
       draftId: String(values.draftId || "")
     })
     var account = accountId
+    var draftsKey = cacheKey
     if (!backend) { reportSendFailure("Mail backend is unavailable", id); return "" }
     backend.call("message.compose", {fields: composeFields}, function(payload, error) {
       if (account !== root.accountId) return
@@ -2424,6 +2419,7 @@ Item {
       payload.draftId = String(values.draftId || "")
       payload.sendId = id
       if (!sendQueue.park(payload, id, order)) root.reportSendFailure("Could not queue this message", id)
+      else draftList.drop(payload.draftId, draftsKey)
     })
     return id
   }
@@ -2439,6 +2435,8 @@ Item {
   // See `Rsvp.qml`: the account file is at its size ceiling.
   function rsvp(response) { rsvpAction.run(response) }
   readonly property bool rsvpFallbackAvailable: rsvpAction.fallbackAvailable
+  readonly property var invitationCalendarState: rsvpAction.calendarState
+  function saveInvitationCalendar() { rsvpAction.retryCalendar() }
   function rsvpMailOnly(response) { rsvpAction.run(response, true) }
   readonly property alias bodies: bodyCache
 
@@ -2627,8 +2625,16 @@ Item {
     return auth.signIn(secret)
   }
 
+  // A removed mailbox's password must not wait in the keyring for one added
+  // again under the same address to find.
+  function forgetStoredCredentials(done) {
+    if (auth && typeof auth.forgetCredential === "function") auth.forgetCredential(done)
+    else if (typeof done === "function") done(true)
+  }
+
   function signOut() {
     intents.clear()
+    cancelActionCompletions()
     queuedActions = []
     actionPreparations = 0
     pendingAction = ""
@@ -2651,6 +2657,13 @@ Item {
     bodyCache.clear()
     clearSelection()
   }
+
+  function cancelActionCompletions() {
+    var callbacks = actionCompletions
+    actionCompletions = []
+    for (var i = 0; i < callbacks.length; i++) callbacks[i]()
+  }
+  Component.onDestruction: cancelActionCompletions()
 
   // ------------------------------------------------------------- lifecycle
 
@@ -2722,7 +2735,8 @@ Item {
     sourceComponent: root.providerId === "imap" ? imapAuthComponent
       : (root.providerId === "jmap" ? jmapAuthComponent
       : (root.providerId === "outlook" ? outlookAuthComponent
-        : (root.providerId === "hey" ? heyAuthComponent : gmailAuthComponent)))
+      : (root.providerId === "m365" ? m365AuthComponent
+        : (root.providerId === "hey" ? heyAuthComponent : gmailAuthComponent))))
   }
 
   // The client takes the manager as a required property, so it cannot be built
@@ -2737,7 +2751,8 @@ Item {
       : (root.providerId === "imap" || root.providerId === "outlook"
         ? imapClientComponent
         : (root.providerId === "jmap" ? jmapClientComponent
-          : (root.providerId === "hey" ? heyClientComponent : gmailClientComponent)))
+        : (root.providerId === "m365" ? m365ClientComponent
+          : (root.providerId === "hey" ? heyClientComponent : gmailClientComponent))))
   }
 
   Component {
@@ -2857,6 +2872,25 @@ Item {
   }
 
   Component {
+    id: m365AuthComponent
+
+    M365Auth {
+      backend: root.backend
+      platform: root.platform
+      accountId: root.accountId
+      address: root.configuredEmail
+      clientId: root.oauthClientId
+
+      onLoginSucceeded: {
+        root.lastError = lastError
+        root.afterSignIn()
+      }
+      onLoggedOut: root.clearNotice()
+      onSessionUnavailable: function(reason) { root.fail(reason) }
+    }
+  }
+
+  Component {
     id: gmailClientComponent
     GmailApiClient { auth: authLoader.item; backend: root.backend }
   }
@@ -2873,6 +2907,11 @@ Item {
       email: root.configuredEmail
       backend: root.backend
     }
+  }
+
+  Component {
+    id: m365ClientComponent
+    M365Client { auth: authLoader.item; email: root.configuredEmail; backend: root.backend }
   }
 
   Component {
@@ -2921,7 +2960,10 @@ Item {
     query: Provider.unreadQuery(root.providerId)
     intervalSec: root.refreshIntervalSec
     pageSize: root.maxMessages
-    onUpdated: function(snapshot) {
+    // Made plain: through the signal Qt 6.12 hands `messages` over as a
+    // sequence, which `summarizeResources` reads as none.
+    onUpdated: function(crossed) {
+      var snapshot = Plain.plain(crossed)
       if (snapshot.error) return
       root.summarizeResources(snapshot.messages || [], function(prepared, preparationError) {
       if (preparationError) return
@@ -2958,12 +3000,18 @@ Item {
   // component completes.
   onAuthChanged: if (auth) auth.restoreSession()
 
-  // Coalesce quick image completions without waiting for a slow next request.
+  // Coalesce image completions into one repaint per interval, backing off from
+  // 100 ms to 3 s. Each repaint rebuilds the whole document with every image
+  // fetched so far, and Qt decodes them on the GUI thread, so a repaint per
+  // completion stalls the shell while a message with many large images loads.
   Timer {
     id: imagePaintTimer
-    interval: 100
+    interval: root.imagePaintWait
     repeat: false
-    onTriggered: root.flushRemoteImages()
+    onTriggered: {
+      root.flushRemoteImages()
+      root.imagePaintWait = Math.min(root.imagePaintWait * 2, root.imagePaintMaxWait)
+    }
   }
 
   // Only ages the "synced" label; nothing else depends on it.
@@ -2977,9 +3025,7 @@ Item {
   Timer {
     id: noticeTimer
     interval: 4000
-    // A busy notice has to outlive the timer: an export can take longer than
-    // four seconds, and a status line that blanked mid-write would look idle
-    // while the file was still being fetched.
+    // A busy export notice outlives the timer; the write can take longer.
     onTriggered: if (!root.exportingEml) root.actionStatus = ""
   }
 

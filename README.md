@@ -1,5 +1,3 @@
-> **Public development copy of [Omamail](https://github.com/huacnlee/omamail), maintained by Chris Gray.** Based on upstream v0.10.8, it adds composer spellchecking, Save as `.eml`, and calendar times that follow the system's 12/24-hour setting. The same three changes are offered upstream as [#323](https://github.com/huacnlee/omamail/pull/323), [#324](https://github.com/huacnlee/omamail/pull/324), and [#325](https://github.com/huacnlee/omamail/pull/325). The installation instructions below install upstream Omamail; this copy has no published release.
-
 # Omamail
 
 Omamail is a native email and calendar app with multiple accounts and keyboard navigation. It runs either as an Omarchy shell plugin or as a standalone Qt desktop application.
@@ -44,9 +42,9 @@ Each installer verifies the release package before replacing an existing version
 
 ### Optional spelling support
 
-Composer body spellchecking uses KDE Sonnet and a local Hunspell dictionary. On Arch, install `sonnet` and `hunspell-en_us`. On Debian and Ubuntu releases that provide Qt 6 Sonnet, install `qml6-module-org-kde-sonnet`, `sonnet6-plugins`, and `hunspell-en-us`. Restart Omamail after installing a dictionary.
+Composer body spellchecking uses KDE Sonnet and a local Hunspell dictionary. On Arch, install `sonnet` and the matching `hunspell-<language>` package, such as `hunspell-en_us` or `hunspell-de`. On Debian and Ubuntu releases that provide Qt 6 Sonnet, install `qml6-module-org-kde-sonnet`, `sonnet6-plugins`, and the matching dictionary, such as `hunspell-en-us`. Restart Omamail after installing a dictionary.
 
-Spelling checks default to US English and can be turned off in Settings. Without the Sonnet QML module or the selected dictionary, composing remains available and Settings explains what is missing. Omamail does not install system packages. Personal words are saved in Omamail's own `spelling.json`; Add to dictionary does not change a global Hunspell dictionary.
+Only completed words in the message body are checked, not the subject or quoted reply lines whose first non-space character is `>`. Checking is limited to the visible viewport plus one viewport of context on each side, with a 20,000-character window, at most 400 visible underline segments, and 8 ms / 12-token work slices. Tokens longer than 128 UTF-16 units are skipped; lines indented by more than 128 spaces or tabs are conservatively skipped. Scrolling checks the newly visible text. Corrections remain available on demand without waiting for the underline pass. Spelling is off by default; turn it on in Settings. It uses the system language (`Qt.locale().name`, for example `en_US` or `de_DE`). The advanced `spellingLanguage` setting is empty for system language, or an installed dictionary code to override it; malformed values are treated as system language and never passed to Sonnet. There is no silent fallback to English: without the Sonnet QML module or the requested dictionary, composing remains available and Settings names what is missing. Omamail does not install system packages. Checks and corrections stay local; nothing leaves the machine. Ignore for this session stays in memory. Add to dictionary saves the word in Omamail's own `spelling.json`; it does not change a global Hunspell dictionary.
 
 ## Run from source
 
@@ -60,7 +58,7 @@ make app-run
 
 ## Features
 
-- **Multiple mailboxes:** Gmail, Outlook, HEY, JMAP and IMAP/SMTP, including Fastmail, iCloud and self-hosted servers.
+- **Multiple mailboxes:** Gmail, Outlook, Microsoft 365, HEY, JMAP and IMAP/SMTP, including Fastmail, iCloud and self-hosted servers.
 - **Mail and calendar:** read, search, compose, manage attachments and respond to meeting invitations. Available actions depend on your provider.
 - **Keyboard navigation:** `j`/`k` to move, `r` to reply, `c` to compose, `/` to search and `?` for all shortcuts.
 - **AI assistance in Omarchy:** ask about selected messages and review suggested drafts with Claude, OpenCode V2 or Codex. Follow your Omarchy default, or select an agent and optional model in Settings. An unsupported system default disables the AI action with a setup explanation. Conversations retain follow-ups and draft proposals; `/clear`, `/history` and `/diagnose` manage the chat.
@@ -71,7 +69,7 @@ make app-run
 
 ## Add your mailbox
 
-Choose a provider in Settings. Gmail needs a Google OAuth client; Outlook needs a Microsoft app registration. HEY uses the official [HEY CLI](https://github.com/basecamp/hey-cli). JMAP and IMAP usually use an app password or API token.
+Choose a provider in Settings. Released builds of Gmail sign in with an included Google OAuth client, and you can use your own instead; Outlook and Microsoft 365 need a Microsoft app registration. HEY uses the official [HEY CLI](https://github.com/basecamp/hey-cli). JMAP and IMAP usually use an app password or API token.
 
 See [mailbox setup](docs/MAILBOXES.md) for provider instructions and limitations, including Microsoft 365 and Proton Mail Bridge.
 

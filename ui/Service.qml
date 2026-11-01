@@ -62,7 +62,7 @@ Item {
     pluginDir: root.pluginDir
     bundledExecutable: root.standalone ? String(root.platform.backendPath || "") : ""
     bundledVersion: root.standalone ? root.version : ""
-    bundledApiVersion: root.standalone ? 5 : 0
+    bundledApiVersion: root.standalone ? 9 : 0
     bundledMode: root.standalone
     developmentExecutable: root.standalone ? "" : (Quickshell.env("OMAMAIL_BIN") || "")
     onValidated: Qt.callLater(rustBackend.reconcileProcess)
@@ -79,6 +79,7 @@ Item {
       Diagnostics {
         objectName: "diagnostics"
         pluginDir: root.pluginDir
+        backendApiVersion: rustBackend.apiVersion
         onFailed: function(message) { if (root.current) root.current.fail(message) }
       }
     }
@@ -99,8 +100,7 @@ Item {
     }
   }
 
-  // Overall update status is diagnostic, not a feature requirement: its
-  // target moves whenever the checkout grows another API revision.
+  // Features gate on fixed API revisions.
   readonly property bool backendNeedsUpdate: backend.needsUpdate
   readonly property bool backendCanExportEml: MessageActions.backendCanExportEml(rustBackend)
   // Event suggestions require API 2 regardless of when that API is released.
@@ -108,6 +108,9 @@ Item {
   readonly property bool backendCanCheckMicrosoftConnection: backend.ready && backend.apiVersion >= 5
   readonly property bool backendCanDiscoverCalendars: backend.ready && backend.apiVersion >= 5
   readonly property bool backendCanGoogleCalendars: backend.ready && backend.apiVersion >= 6
+  readonly property bool backendCanSaveInvitations: backend.ready && backend.apiVersion >= 9
+  // Older backends send the bare address.
+  readonly property bool backendCanNameSender: backend.ready && backend.apiVersion >= 7
   readonly property bool calendarRemindersEnabled: !settings || settings.calendarRemindersEnabled !== false
   readonly property int calendarSnoozeMinutes: Math.max(1, Math.min(1440,
     Math.floor(Number(settings && settings.calendarSnoozeMinutes) || 5)))
@@ -468,7 +471,9 @@ Item {
     var text = String(value === undefined || value === null ? "" : value)
     if (platform && typeof platform.setClipboard === "function")
       return platform.setClipboard(text)
-    return Quickshell.execDetached(["wl-copy", text])
+    // NUL cannot cross argv without truncating the sender's text.
+    if (text.indexOf("\0") >= 0) return false
+    return Quickshell.execDetached(["wl-copy", "--", text])
   }
 
   function configPath(name) {
@@ -505,14 +510,12 @@ Item {
     return true
   }
 
-  function chooseFiles(callback) { return choose("pick", callback) }
-  function chooseFolder(callback) { return choose("folder", callback) }
-  function choose(mode, callback) {
+  function chooseFiles(callback, folder) {
     if (platform && typeof platform.chooseFiles === "function")
-      return mode === "pick" && platform.chooseFiles(callback)
+      return !folder && platform.chooseFiles(callback)
     var request = hostProcessComponent.createObject(root, {
       operation: "result", callback: callback,
-      command: [root.pluginDir + "/scripts/attachment.sh", mode]
+      command: [root.pluginDir + "/scripts/attachment.sh", folder ? "folder" : "pick"]
     })
     if (!request) {
       if (typeof callback === "function") callback(({ok:false,error:"No file picker is available"}))
@@ -699,8 +702,7 @@ Item {
   readonly property alias spellingWordStore: spelling.wordStore
   readonly property alias spellingPersonalWords: spelling.words
   readonly property alias spellingPersonalWordsError: spelling.error
-  function setSpellingEnabled(value) { persistSetting("spellingEnabled", value !== false) }
-  function setSpellingLanguage(value) { persistSetting("spellingLanguage", String(value || "en_US")) }
+  function setSpellingEnabled(value) { persistSetting("spellingEnabled", value === true) }
   function addPersonalWord(word) { spelling.wordStore.add(word) }
   function removePersonalWord(word) { spelling.wordStore.remove(word) }
 
@@ -998,13 +1000,9 @@ Item {
 
     var entry = {}
     for (var key in accounts[index]) entry[key] = accounts[index][key]
-    if (raw.provider !== undefined) entry.provider = raw.provider
-    if (raw.email !== undefined) entry.email = raw.email
-    if (raw.clientId !== undefined) entry.clientId = raw.clientId
-    if (raw.clientSecret !== undefined) entry.clientSecret = raw.clientSecret
-    if (raw.imap !== undefined) entry.imap = raw.imap
-    if (raw.jmap !== undefined) entry.jmap = raw.jmap
-    if (raw.label !== undefined) entry.label = raw.label
+    var keys = ["provider", "email", "clientId", "clientSecret", "imap", "jmap", "label", "senderName"]
+    for (var k = 0; k < keys.length; k++)
+      if (raw[keys[k]] !== undefined) entry[keys[k]] = raw[keys[k]]
 
     // Never rebuild through `add`: a colliding id replaces the *other* row
     // and drops this one, which is how re-authing Proton deleted iCloud.
@@ -1063,11 +1061,8 @@ Item {
   function toggleMonitored(labelId, accountId) {
     var owner = labelOwner(accountId)
     if (!owner) return
-    var next = Accounts.toggleMonitored(accountList, owner.accountId, labelId)
-    if (Accounts.serialize(next) === Accounts.serialize(accountList)) return
-    accountList = next
-    saveAccounts()
-    owner.labelActions.refreshMonitored()
+    if (commitAccounts(Accounts.toggleMonitored(accountList, owner.accountId, labelId)))
+      owner.labelActions.refreshMonitored()
   }
 
   // The watched ids an account's rename or move left behind, written to its
@@ -1075,46 +1070,28 @@ Item {
   function setMonitoredIds(index, ids) {
     var account = accountAt(index)
     if (!account) return
-    var next = Accounts.setMonitored(accountList, account.accountId, ids)
-    if (Accounts.serialize(next) === Accounts.serialize(accountList)) return
-    accountList = next
-    saveAccounts()
+    commitAccounts(Accounts.setMonitored(accountList, account.accountId, ids))
   }
 
-  function setAccountLabel(id, text) {
-    var next = Accounts.setLabel(accountList, id, text)
-    if (Accounts.serialize(next) === Accounts.serialize(accountList)) return
+  // Writes only when the edit changed something.
+  function commitAccounts(next) {
+    if (Accounts.serialize(next) === Accounts.serialize(accountList)) return false
     accountList = next
     saveAccounts()
+    return true
   }
 
-  function setAccountSignatureHtml(id, html) {
-    var next = Accounts.setSignatureHtml(accountList, id, html)
-    if (Accounts.serialize(next) === Accounts.serialize(accountList)) return
-    accountList = next
-    saveAccounts()
-  }
-
-  function setAccountSignature(id, text) {
-    var next = Accounts.setSignature(accountList, id, text)
-    if (Accounts.serialize(next) === Accounts.serialize(accountList)) return
-    accountList = next
-    saveAccounts()
-  }
+  function setAccountLabel(id, text) { commitAccounts(Accounts.setLabel(accountList, id, text)) }
+  function setAccountSenderName(id, text) { commitAccounts(Accounts.setSenderName(accountList, id, text)) }
+  function setAccountSignatureHtml(id, html) { commitAccounts(Accounts.setSignatureHtml(accountList, id, html)) }
+  function setAccountSignature(id, text) { commitAccounts(Accounts.setSignature(accountList, id, text)) }
 
   function saveAccounts(opts) {
     if (!accountsLoaded) return
-    // A nameless row is setup state, never a mailbox. There is no legitimate
-    // path that persists only one — Add waits for configureAccount, and the UI
-    // does not remove the final saved account — so refusing this write is the
-    // last line of defence against replacing every account with first-run.
-    //
-    // Only the mailboxes, never the form's own working row: a save triggered by
-    // one account used to carry whatever draft happened to be open along with
-    // it, stranding a row on disk that nothing could select or remove. The
-    // guard is applied to that stripped list rather than to what is in memory,
-    // so it is testing the bytes that are about to be written instead of
-    // trusting the two to agree.
+    // A nameless row is setup state, never a mailbox: refusing to persist one
+    // is the last defence against replacing every account with first-run.
+    // Save only saved mailboxes, never the form's working row, and guard the
+    // stripped list so the check tests the bytes about to be written.
     var writable = Accounts.savedOnly(accountList)
     if (!Accounts.hasSavedAccounts(writable)) return
     // And no mailbox the list could name may go missing on the way to the
@@ -1380,9 +1357,8 @@ Item {
   // to send the whole window back to the beginning.
   property bool anyAccountReady: false
 
-  // Instantiator.objectAt is not a property. sendIdentities has to watch
-  // something recount() updates, or From is computed once with no hosts
-  // and never lists the other signed-in mailboxes.
+  // Instantiator.objectAt is not a property, so accountSummaries and
+  // senderSources read this. It moves when a host is built and in recount().
   property int hostsEpoch: 0
 
   function recount() {
@@ -1429,6 +1405,8 @@ Item {
         // The name as it was typed, empty when none was, so a field editing
         // it shows what is there rather than the address standing in for it.
         label: String(accounts[i].label || ""),
+        provider: String(accounts[i].provider || ""),
+        senderName: String(accounts[i].senderName || ""),
         signature: String(accounts[i].signature || ""),
         signatureHtml: String(accounts[i].signatureHtml || "")
       })
@@ -1437,6 +1415,7 @@ Item {
   }
 
   readonly property var accountSummaries: {
+    var _epoch = hostsEpoch
     var out = []
     var accounts = accountList ? accountList.accounts : []
     for (var i = 0; i < accounts.length; i++) {
@@ -1666,6 +1645,7 @@ Item {
   }
 
   readonly property alias calendarController: sharedCalendar
+  readonly property bool noCalendars: sharedCalendar.noCalendars
   readonly property var barEvents: Preview.upcomingEvents(
     barCalendar.events, Date.now(), 2)
 
@@ -1736,20 +1716,17 @@ Item {
       root.sendIdentities = result.identities || []
     })
   }
-  // The name the entry being edited was given, or "" for none: what the
-  // setup page's name field shows. `accountLabel` cannot say, because it
-  // falls through to the address's local part.
-  readonly property string accountName: {
+  // The name the entry being edited was given, and the rest the setup page
+  // shows for it, "" for none. `accountLabel` cannot say, because it falls
+  // through to the address's local part.
+  function editingEntry() {
     var accounts = accountList ? accountList.accounts : []
     var index = editingIndex()
-    return index >= 0 && index < accounts.length ? String(accounts[index].label || "") : ""
+    return index >= 0 && index < accounts.length ? accounts[index] : ({})
   }
-
-  readonly property string accountAddress: {
-    var accounts = accountList ? accountList.accounts : []
-    var index = editingIndex()
-    return index >= 0 && index < accounts.length ? String(accounts[index].email || "") : ""
-  }
+  readonly property string accountName: String(editingEntry().label || "")
+  readonly property string accountSenderName: String(editingEntry().senderName || "")
+  readonly property string accountAddress: String(editingEntry().email || "")
   readonly property int inboxUnread: unified
     ? Number(unifiedSnapshot.totalUnread || 0) : (current ? current.inboxUnread : 0)
   readonly property var messages: unified
@@ -1987,6 +1964,9 @@ Item {
   readonly property bool canRespondToInvite: !!reading && reading.canRespondToInvite
   readonly property bool rsvpSending: !!reading && reading.rsvpSending
   readonly property bool rsvpFallbackAvailable: !!reading && reading.rsvpFallbackAvailable === true
+  readonly property var invitationCalendarState: reading ? reading.invitationCalendarState : null
+  signal invitationCalendarSaved()
+  function saveInvitationCalendar() { if (reading) reading.saveInvitationCalendar() }
   readonly property string rsvpCalendarUrl: reading ? Provider.calendarAttendanceUrl(reading.providerId, reading.accountId) : ""
   // Empty when this message offers no way off a list, which is the answer for
   // everything that is not a newsletter.
@@ -2023,13 +2003,14 @@ Item {
   readonly property int sendSecondsRemaining: pendingSendHost
     ? pendingSendHost.sendSecondsRemaining : 0
   readonly property string lastError: unified
-    ? (unifiedSnapshotError || unifiedSnapshot.error || "") : (current ? current.lastError : "")
+    ? (unifiedBatchAction.error || unifiedSnapshotError || unifiedSnapshot.error || "") : (current ? current.lastError : "")
   // The last thing a mailbox said it did, and the undo that goes with it. Read
   // from `current` alone, archiving a row from a non-active mailbox in a merged
   // list produced no confirmation and no undo affordance at all — so the most
   // recent of them wins, which is the one the press just produced.
   readonly property string actionStatus: {
     if (!unified) return current ? current.actionStatus : ""
+    if (unifiedBatchAction.status !== "") return unifiedBatchAction.status
     var _epoch = listEpoch
     var newest = ""
     var at = -1
@@ -2227,19 +2208,22 @@ Item {
   function selectLabel(name, labelId) {
     if (current && !unified) current.selectLabel(name, labelId)
   }
-  function refuseUnavailableAction(action, id) { return MessageActions.refuseUnavailableAction(root, action, id) }
-  function act(id, action, quiet, memberOnly) { return MessageActions.act(root, id, action, quiet, memberOnly) }
-  function toggleStar(id) { return MessageActions.toggleStar(root, id) }
+  function refuseUnavailableAction(a, id) { return MessageActions.refuseUnavailableAction(root, a, id) }
+  function act(id, a, q, m) { unifiedBatchAction.clear(); return MessageActions.act(root, id, a, q, m) }
+  function toggleStar(id) { unifiedBatchAction.clear(); MessageActions.toggleStar(root, id) }
   function canExportEmlFor(id) { return MessageActions.canExportEmlFor(root, id) }
   function accountForMessage(id) { return MessageActions.accountForMessage(root, id) }
-  function exportEmlFor(accountId, id) { return MessageActions.exportEmlFor(root, accountId, id) }
-  function canChooseEmlFolder(id) { return MessageActions.canChooseEmlFolder(root, id) }
-  function exportEmlToFolder(accountId, id) { return MessageActions.exportEmlToFolder(root, accountId, id) }
+  function exportEmlFor(a, id) { return MessageActions.exportEmlFor(root, a, id) }
+  function exportEmlToFolder(a, id) { return MessageActions.exportEmlToFolder(root, a, id) }
   signal emlSaved(var result)
   function exportEml(id) { return MessageActions.exportEml(root, id) }
-  function exportFromView(view, cursorId) { return MessageActions.exportFromView(root, view, cursorId) }
-  function markAllRead() { return MessageActions.markAllRead(root) }
-  function actMany(ids, action) { return MessageActions.actMany(root, ids, action) }
+  function exportFromView(v, c) { return MessageActions.exportFromView(root, v, c) }
+  function markAllRead() { MessageActions.markAllRead(root) }
+  UnifiedBatchAction { id: unifiedBatchAction; service: root }
+  function actMany(ids, action, completion) {
+    if (!unified) return current ? current.actMany(ids, action, completion) : false
+    return unifiedBatchAction.run(ids, action, completion)
+  }
   // The mailbox the From address belongs to, which compose already names:
   // `sendIdentities` spans every account and carries the id, so a unified
   // view needed the routing rather than a new question.
@@ -2614,14 +2598,11 @@ Item {
     onTriggered: root.refreshCalendarPreview()
   }
 
-  // The model is a COUNT, not the array. An Instantiator rebuilds every
-  // delegate when its model changes identity, and this list is reassigned
-  // whole on every save — so modelling the array tore down all the accounts
-  // whenever one of them learned its own address, dropping their loaded state
-  // and landing in-flight callbacks on half-destroyed objects.
+  // Count-based delegates survive account metadata saves and in-flight callbacks.
   Instantiator {
     id: accountHosts
     model: root.accountCount
+    onObjectAdded: root.hostsEpoch++
 
     delegate: MailAccount {
       platform: root
@@ -2645,6 +2626,7 @@ Item {
       providerId: entry ? entry.provider : Provider.DEFAULT_ID
       imapSettings: entry ? entry.imap : null
       jmapSettings: entry ? entry.jmap : null
+      senderName: entry ? String(entry.senderName || "") : ""
       // Only a Gmail account has a client-keyed refresh token to inherit, and
       // only the first one may claim it.
       mayAdoptLegacyToken: index === 0 && (!entry || entry.provider === "gmail")

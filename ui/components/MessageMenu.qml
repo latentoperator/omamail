@@ -35,19 +35,27 @@ Item {
   property string ownerAccountId: ""
   property string nativeId: ""
   readonly property var menuRows: [continueRow, replyRow, replyAllRow, forwardRow, archiveRow,
-    unarchiveRow, moveRow,
+    unarchiveRow, untrashRow, moveRow,
     trashRow, spamRow, readRow, starRow, exportRow, exportFolderRow, browserRow, aiRow]
-  // Whether this message is archived — out of the inbox and not somewhere
-  // that has its own verb. Read off the summary the menu was opened on rather
-  // than asked of the service, because the menu is about one message. IMAP
-  // synthesises all four of these from the folder, so one rule serves both
-  // kinds of provider.
-  readonly property bool archived: !!root.summary
-    && root.summary.inInbox === false
-    && root.summary.inTrash !== true
-    && root.summary.inSpam !== true
-    && root.summary.isSent !== true
-    && root.summary.isDraft !== true
+  // The rows a choice here will act on, as App's handler sends it: every
+  // ticked row when the menu was opened on one of them (the list says which,
+  // `MessageList.reachedIds`), else the one message. Restore, Move to Inbox
+  // and Star or Unstar are decided over all of them: Restore only when every
+  // one is in the trash, Unstar only when every one is starred. Mark read or
+  // unread follows the row the menu was opened on and reaches them all. Move
+  // to Inbox is offered for an archived message anywhere (`Model.isArchived`),
+  // where the row's button offers it only in Archive. IMAP synthesises the
+  // flags from the folder, so one rule serves both kinds of provider.
+  property var reachedIds: []
+  readonly property var reached: {
+    if (!root.summary) return []
+    if (root.memberOnly || root.reachedIds.length < 2) return [root.summary]
+    var rows = Model.summariesById(root.service ? root.service.messages : [], root.reachedIds)
+    return rows.length > 0 ? rows : [root.summary]
+  }
+  readonly property bool archived: Model.allArchived(root.reached, root.service)
+  readonly property bool trashed: Model.allInTrash(root.reached, root.service)
+  readonly property string starAction: Model.starActionFor(root.reached)
 
   // Whether the list it was opened from is a label's, and whether that label
   // is one a message can be taken out of — which is the same question
@@ -82,13 +90,19 @@ Item {
   anchors.fill: parent
   z: 50
 
-  function openAt(id, sceneX, sceneY) {
+  function openAt(id, sceneX, sceneY, ids) {
     root.memberOnly = false
+    // Copied by index: through a signal the list arrives as a sequence, not
+    // a JavaScript array.
+    var reached = []
+    for (var i = 0; ids && i < ids.length; i++) reached.push(String(ids[i]))
+    root.reachedIds = reached
     openMenu(id, sceneX, sceneY)
   }
 
   function openForMember(id, sceneX, sceneY) {
     root.memberOnly = true
+    root.reachedIds = []
     openMenu(id, sceneX, sceneY)
   }
 
@@ -239,8 +253,20 @@ Item {
       MenuRow {
         id: unarchiveRow
         visible: (!root.service || root.service.canArchive) && root.archived
-        text: root.inLabelView ? "Move to Inbox and remove label" : "Move to Inbox"
+        text: Model.actionName("unarchive", root.inLabelView)
         onActivated: root.run("unarchive")
+      }
+      // Out of the trash, by the verb every client has for it — which is why
+      // it needs no capability, and why it is offered on a provider with no
+      // archive and no move, where it is the only way back. Undoing a trash
+      // is not adding INBOX: `labelChangesFor` would leave TRASH on the
+      // message, which is why the row above is not offered here. "Restore"
+      // because where it lands is the provider's (`Model.actionName`).
+      MenuRow {
+        id: untrashRow
+        visible: root.trashed
+        text: Model.actionName("untrash")
+        onActivated: root.run("untrash")
       }
       MenuRow {
         id: moveRow
@@ -250,7 +276,14 @@ Item {
         text: "Move to..."
         onActivated: root.run("moveToLabel")
       }
-      MenuRow { id: trashRow; text: "Move to trash"; tone: root.urgentColor; onActivated: root.run("trash") }
+      // Not for a message already there: trashing it again moves nothing.
+      MenuRow {
+        id: trashRow
+        visible: !root.trashed
+        text: Model.actionName("trash")
+        tone: root.urgentColor
+        onActivated: root.run("trash")
+      }
       MenuRow {
         id: spamRow
         visible: !root.service || root.service.canReportSpam
@@ -272,8 +305,8 @@ Item {
       MenuRow {
         id: starRow
         visible: !root.service || root.service.canStar
-        text: root.summary && root.summary.starred ? "Unstar" : "Star"
-        onActivated: root.run(root.summary && root.summary.starred ? "unstar" : "star")
+        text: root.starAction === "unstar" ? "Unstar" : "Star"
+        onActivated: root.run(root.starAction)
       }
       // Saving the message out as a file. Hidden where the provider has no
       // native path or the connected backend does not advertise the method,
@@ -281,7 +314,7 @@ Item {
       MenuRow {
         id: exportRow
         objectName: "message-menu-export-eml"
-        visible: !!root.service && root.service.canExportEmlFor(root.messageId)
+        visible: !!root.service && typeof root.service.canExportEmlFor === "function" && root.service.canExportEmlFor(root.messageId)
         text: "Save as .eml"
         // Writes to the user's disk through the backend rather than through a
         // provider verb, so it goes straight to the service the way Open in
@@ -291,8 +324,7 @@ Item {
       MenuRow {
         id: exportFolderRow
         objectName: "message-menu-export-eml-folder"
-        visible: exportRow.visible && typeof root.service.canChooseEmlFolder === "function"
-          && root.service.canChooseEmlFolder(root.messageId)
+        visible: exportRow.visible && root.service.standalone !== true
         text: "Save as .eml to folder..."
         onActivated: root.exportMessageToFolder()
       }
