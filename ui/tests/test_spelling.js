@@ -117,6 +117,18 @@ test("Overlong chunks are skipped with bounded scans and skipped words still yie
   assert.ok(bounded.index <= r.MAX_SLICE_CHARACTERS)
 })
 
+test("Personal words reject malformed data and merge late disk reads with session additions", () => {
+  const rules = spelling()
+  for (const raw of ["", "{", "null", "[]", '{"words":{}}']) {
+    deepEqual(rules.normalizePersonalWords(raw), [])
+  }
+  deepEqual(rules.normalizePersonalWords('{"words":["a","b","a","",42,null,{},"café"]}'), ["a", "b", "café"])
+  const current = ["session", "shared"]
+  deepEqual(rules.mergePersonalWords(current, '{"words":["disk","shared","disk"]}'), ["session", "shared", "disk"])
+  assert.deepEqual(current, ["session", "shared"], "a merge does not mutate the session snapshot")
+  deepEqual(rules.mergePersonalWords(current, "invalid"), current)
+})
+
 test("Settings default to disabled system language and only explicit true enables checking", () => {
   const rules = spelling()
   for (const settings of [null, {}, { spellingEnabled: "yes" }, { spellingEnabled: 1 }, { spellingEnabled: "true" }]) {

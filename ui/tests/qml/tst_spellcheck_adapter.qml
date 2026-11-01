@@ -151,9 +151,9 @@ Item {
       // order.
       edit.text = "zqxjw zqxjw"
       compare(a.inspect(0).misspelled, true)
-      a.ignoreForSession("zqxjw")
+      a.personalWords = ["zqxjw"]
       compare(a.inspect(0).misspelled, false)
-      // Ignoring never disables the checker for other words.
+      // Applying personal words never disables the checker for other words.
       compare(a.available, true)
       edit.text = root.sample
       compare(a.inspect(edit.text.indexOf("wrod")).misspelled, true)

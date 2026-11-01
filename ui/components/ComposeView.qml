@@ -46,6 +46,7 @@ DropArea {
   property bool spellingEnabled: Spelling.decodeSettings(service ? { spellingEnabled: service.spellingEnabled } : null).enabled
   property string spellingLanguage: Spelling.resolveLanguage(
     service ? service.spellingLanguage : "", Qt.locale().name)
+  property var spellingPersonalWords: service ? service.spellingPersonalWords : []
   // Bumped on every body change so a menu opened before an edit can tell that
   // the text under its saved position moved.
   property int bodyRevision: 0
@@ -223,6 +224,12 @@ DropArea {
     return true
   }
 
+  // App-owned personal words: owned and persisted by the service;
+  // applied to the adapter and rechecked whenever the list changes.
+  onSpellingPersonalWordsChanged: {
+    if (spellcheckLoader.item) spellcheckLoader.item.personalWords = spellingPersonalWords
+    refreshSpellingRanges()
+  }
   // Drafts parked for their send's undo window, oldest first, each beside
   // the name of the send it belongs to. The timer owns them while the
   // visible composer stays free for the next message.
@@ -2145,6 +2152,7 @@ DropArea {
       item.document = bodyEdit.textDocument
       item.editor = bodyEdit
       item.enabled = root.spellingEnabled
+      item.personalWords = root.spellingPersonalWords
       root.refreshSpellingRanges()
     }
   }
@@ -2380,6 +2388,10 @@ DropArea {
     onSpellingIgnore: function(word) {
       if (root.spellingAdapter) root.spellingAdapter.ignoreForSession(word)
       root.refreshSpellingRanges()
+    }
+    onSpellingAddToDictionary: function(word) {
+      if (root.service && typeof root.service.addPersonalWord === "function")
+        root.service.addPersonalWord(word)
     }
   }
 }

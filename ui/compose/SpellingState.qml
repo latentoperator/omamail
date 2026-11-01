@@ -15,6 +15,14 @@ Item {
     && probe.item !== null && probe.item.available
   readonly property string status: !enabledRequest ? "disabled" : (probe.status === Loader.Error
     ? "no-module" : (probe.item ? probe.item.status : "loading"))
+  readonly property alias wordStore: personalWords
+  readonly property alias words: personalWords.words
+  readonly property alias error: personalWords.error
+
+  // Loaded whether or not checking is on, so a word list is never lost by
+  // turning spelling off and back on.
+  PersonalWords { id: personalWords; service: root.service }
+
   // Sonnet enumerates dictionaries once per process. Installing one requires
   // restarting Omamail; a new adapter alone cannot discover it.
   Loader { id: probe; active: root.enabledRequest; source: "SpellcheckAdapter.qml" }

@@ -30,6 +30,9 @@ Item {
   // when spelling is off, so this is a runtime toggle within a loaded adapter.
   property string language: ""
   readonly property string resolvedLanguage: Spelling.resolveLanguage(language, Qt.locale().name)
+  // App-owned words to treat as correct. Persistence belongs to the
+  // settings layer in Service.qml; this property only applies them.
+  property var personalWords: []
   // Availability is about the *requested* language, and it is computed after
   // `setCurrentLanguage` rather than bound to `spellCheckerFound`.
   //
@@ -60,6 +63,7 @@ Item {
   Component.onDestruction: Session.unsubscribe(adapter)
   onEnabledChanged: applySettings()
   onResolvedLanguageChanged: applySettings()
+  onPersonalWordsChanged: applyPersonalWords()
 
   // Returns { word, misspelled, suggestions }. Call this for the position of a
   // click or the caret; it also primes applyCorrection for the same position.
@@ -103,6 +107,15 @@ Item {
     // leaves the prior one in place, which is the no-dictionary answer.
     requestedLanguageAvailable = highlighter.spellCheckerFound
       && resolvedLanguage !== "" && highlighter.currentLanguage === resolvedLanguage
+    if (enabled) applyPersonalWords()
+  }
+
+  function applyPersonalWords() {
+    if (!available) return
+    for (var i = 0; i < personalWords.length; i++) {
+      var word = String(personalWords[i])
+      if (word !== "") highlighter.ignoreWord(word)
+    }
     Session.changed()
   }
 
