@@ -6,6 +6,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "../../../ui/components" as Components
+import "../../../ui/compose" as Compose
 
 TestCase {
   id: testCase
@@ -36,6 +37,19 @@ TestCase {
   Component { id: parserComponent; SplitParser { splitMarker: "|" } }
   Component { id: fileComponent; FileView { path: "/fixture/existing"; watchChanges: true } }
   Component { id: processComponent; Process {} }
+  Component {
+    id: wordsComponent
+    Compose.PersonalWords {
+      service: QtObject {
+        property var writes: []
+        function configPath(name) { return "/fixture/config/omamail/" + name }
+        function writeConfig(name, text, callback) {
+          writes = writes.concat([{ name: String(name), text: String(text) }])
+          if (typeof callback === "function") callback(true, "")
+        }
+      }
+    }
+  }
   Component {
     id: controlledNumberComponent
     Item {
@@ -411,6 +425,38 @@ TestCase {
     compare(failures, 1)
     host.failed("/fixture/missing", "external")
     compare(failures, 2)
+  }
+
+  function test_file_view_tells_a_missing_file_from_an_unreadable_one() {
+    var file = createTemporaryObject(fileComponent, testCase, { store: host, path: "/fixture/missing" })
+    verify(file)
+    var errors = []
+    file.loadFailed.connect(function(error) { errors.push(error) })
+    file.reload()
+    host.unreadable = ({ "/fixture/locked": true })
+    file.path = "/fixture/locked"
+    compare(errors, [2, 1])
+  }
+
+  // Review R3 on the standalone host: an existing word list this process
+  // cannot read is never replaced; a missing one is created on first Add.
+  function test_personal_words_never_overwrite_an_unreadable_file_on_standalone() {
+    host.unreadable = ({ "/fixture/config/omamail/spelling.json": true })
+    var locked = createTemporaryObject(wordsComponent, testCase)
+    verify(locked)
+    compare(locked.loaded, false)
+    verify(locked.error !== "")
+    locked.add("sessiononly")
+    compare(locked.words, ["sessiononly"])
+    compare(locked.service.writes.length, 0, "an unreadable list is never overwritten")
+
+    host.unreadable = ({})
+    var fresh = createTemporaryObject(wordsComponent, testCase)
+    verify(fresh)
+    compare(fresh.loaded, true, "a missing list starts empty")
+    fresh.add("firstword")
+    compare(fresh.service.writes.length, 1)
+    compare(JSON.parse(fresh.service.writes[0].text).words, ["firstword"])
   }
 
   function test_process_adapts_native_lines_and_lifecycle() {

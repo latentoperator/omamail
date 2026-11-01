@@ -151,7 +151,8 @@ function hiddenBindings(service, view, cursorId) {
   var hidden = service && service.hasAgent === false
     ? ["askAgent", "assistantSend", "assistantChooseCommand", "assistantCommandNext", "assistantCommandPrevious"] : []
   var id = view === "reader" && service && service.selectedId !== "" ? service.selectedId : cursorId
-  if (!service || !service.canExportEmlFor(id)) hidden.push("exportEml")
+  if (!service || typeof service.canExportEmlFor !== "function" || !service.canExportEmlFor(id))
+    hidden.push("exportEml")
   return hidden
 }
 

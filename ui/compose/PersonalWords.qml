@@ -59,8 +59,8 @@ Item {
   // an existing list on disk that this session has not seen, so the store
   // stays unloaded: words added now still work in memory (save() only queues
   // them) and the unread file is never replaced by this session's snapshot.
-  // Quickshell passes FileViewError (FileNotFound is 2); the test and
-  // standalone shims pass nothing and only fail on a missing or unset path.
+  // Quickshell and the standalone shim both pass FileViewError (FileNotFound
+  // is 2). Only the inert test shim passes nothing, and it never reads a file.
   function readFailed(error) {
     if (error === undefined || error === null || Number(error) === 2) {
       merge("")

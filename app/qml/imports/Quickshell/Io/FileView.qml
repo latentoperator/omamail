@@ -17,7 +17,10 @@ QtObject {
 
   signal loaded()
   signal fileChanged()
-  signal loadFailed()
+  // Carries Quickshell's FileViewError so listeners can tell "no file yet"
+  // (FileNotFound, 2) from a file that exists but could not be read
+  // (Unknown, 1). Listeners that ignore the argument are unaffected.
+  signal loadFailed(var error)
 
   function report(error) {
     if (printErrors && String(error || "") !== "") console.warn(String(error))
@@ -30,9 +33,14 @@ QtObject {
     if (_watchedPath !== "") store.watch(_watchedPath, true)
   }
 
+  function readError() {
+    if (!store || path === "" || typeof store.exists !== "function") return 2
+    return store.exists(path) ? 1 : 2
+  }
+
   function reload() {
     if (!store || typeof store.read !== "function" || path === "") {
-      loadFailed()
+      loadFailed(2)
       return
     }
     _reading = true
@@ -40,7 +48,7 @@ QtObject {
     _reading = false
     if (!result.ok) {
       report(result.error)
-      loadFailed()
+      loadFailed(readError())
       return
     }
     _text = String(result.text || "")
@@ -52,13 +60,13 @@ QtObject {
   function setText(value) {
     _text = String(value || "")
     if (!store || typeof store.write !== "function" || path === "") {
-      loadFailed()
+      loadFailed(1)
       return
     }
     var result = store.write(path, _text, atomicWrites) || ({})
     if (!result.ok) {
       report(result.error)
-      loadFailed()
+      loadFailed(1)
     }
   }
 
@@ -81,7 +89,7 @@ QtObject {
     function onFailed(failedPath, error) {
       if (root._reading || String(failedPath) !== root.path) return
       root.report(error)
-      root.loadFailed()
+      root.loadFailed(root.readError())
     }
   }
 
