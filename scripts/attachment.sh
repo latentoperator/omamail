@@ -290,7 +290,12 @@ pick_folder() {
   else
     fail_json "No folder picker is available"
   fi
-  list=$(printf '%s\n' "$list" | sed -n '1p')
+  # One folder only. A second line is either a second folder or a newline in
+  # the name; taking the first line would silently pick a different folder.
+  case "$list" in
+    *"
+"*) fail_json "Choose a single folder whose name has no line breaks" ;;
+  esac
   # The backend takes a folder only in its plain form, so no trailing slash.
   while [ "${#list}" -gt 1 ] && [ "${list%/}" != "$list" ]; do list=${list%/}; done
   case "$list" in
