@@ -198,7 +198,14 @@ impl Store {
         &self.path
     }
     /// Creating/removing a turn invalidates the in-process conversation index.
-    pub(super) fn revision(&self) -> Result<[u64; 6]> {
+    ///
+    /// The root's coarse mtime/ctime only advance once per kernel tick, so a
+    /// turn directory created inside the same tick as the previous poll leaves
+    /// both unchanged. The link count moves on every subdirectory create and
+    /// remove even then, which is what keeps out-of-band turn creation visible.
+    /// It cannot see a same-tick create that cancels a same-tick remove, so this
+    /// is a narrower signal than a general invalidation guarantee.
+    pub(super) fn revision(&self) -> Result<[u64; 7]> {
         let m = self.root.metadata().map_err(|_| ioerror())?;
         Ok([
             m.dev(),
@@ -207,6 +214,7 @@ impl Store {
             m.mtime_nsec() as u64,
             m.ctime() as u64,
             m.ctime_nsec() as u64,
+            m.nlink(),
         ])
     }
     pub fn contains(&self, id: &str) -> Result<bool> {
