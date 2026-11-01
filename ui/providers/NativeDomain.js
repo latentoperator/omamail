@@ -137,6 +137,7 @@ var FACTS = {
       "archive": true,
       "batch": true,
       "conversations": false,
+      "emlExport": false,
       "labels": false,
       "manageLabels": false,
       "move": false,
