@@ -1,5 +1,15 @@
 # Repository working agreements
 
+## This repository
+
+This is a public development copy of [huacnlee/omamail](https://github.com/huacnlee/omamail), maintained by Chris Gray. It keeps the upstream history and the MIT [license](LICENSE); keep both intact.
+
+Work here uses this repository's own branches and pull requests. Do not push to `huacnlee/omamail` or open issues or pull requests there. The Release, Pages, and CI report workflows are disabled: do not run `make publish`. During development, do not run upstream installers, `make install`, or `scripts/link-plugin.sh`, which can replace the plugin running on the desktop or restart the shell.
+
+Test with synthetic messages and temporary application directories. Never commit account registries, OAuth material, real mail, exported personal messages, or screenshots of live inboxes. Small synthetic `.eml` fixtures are allowed under a clearly identified test fixture directory. Treat commits, pull request text, attachments, and Actions logs as public.
+
+The upstream rules below apply unchanged. Some historical architecture prose describes earlier implementations; confirm the current source before extending a module.
+
 ## Required reading by task
 
 Read the relevant document before changing its area; these contain constraints that are easy to miss in the code.
@@ -54,6 +64,8 @@ Read the relevant document before changing its area; these contain constraints t
 Start with [CONTRIBUTING.md — Review](CONTRIBUTING.md#review) for scope decisions, review priorities and comment style. Use this file's task index to read only the domain guidance relevant to the change. Product, design and verification requirements belong in their source documents rather than being repeated in reviewer prompts.
 
 ## Releasing and verification
+
+The release rules below describe inherited upstream machinery. This derivative's Release workflow is disabled; do not run `make publish` or publish this repository's assets during feature development.
 
 - `make publish VERSION=X.Y.Z` prepares one versioned release PR from clean, synchronized main; without VERSION it increments the patch. Never push main directly. Release CI publishes and verifies immutable assets before updating the binary pin and folding API metadata on that same branch. Tags alone do not publish. Follow `docs/BACKEND-RUNTIME.md` for release and recovery details.
 - Preserve `scripts/release-notes.sh` aggregation of PR release-note sections; GitHub-generated notes are not a substitute.

@@ -16,3 +16,7 @@ docs/superpowers/
 
 # Python leaves these beside the harvester scripts.
 __pycache__/
+
+# Local development evidence stays out of public Git history unless sanitized.
+/artifacts/
+/.test-home/
