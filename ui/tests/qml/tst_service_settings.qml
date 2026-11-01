@@ -416,8 +416,17 @@ Item {
       verify(mailService.spellingPersonalWords.indexOf("sessiononly") >= 0)
       compare(configPlatform.writes.length, 0, "an unreadable dictionary is never overwritten")
 
-      store.apply("")
+      // A later successful load releases the queued write; let it finish
+      // before the missing-file half starts from a clean store.
+      store.merge('{"words":["existingword"]}')
+      compare(configPlatform.writes.length, 1, "a later readable load releases the queued write")
+      var written = JSON.parse(configPlatform.writes[0].text).words
+      verify(written.indexOf("existingword") >= 0, "the saved words survive")
+      verify(written.indexOf("sessiononly") >= 0, "and the session's word is kept")
+      compare(configPlatform.confirm(0, true, ""), true)
       configPlatform.writes = []
+      configPlatform.callbacks = []
+      store.apply("")
       store.loaded = false
       store.pending = false
       store.error = ""
