@@ -314,7 +314,7 @@ Item {
       MenuRow {
         id: exportRow
         objectName: "message-menu-export-eml"
-        visible: !!root.service && root.service.canExportEmlFor(root.messageId)
+        visible: !!root.service && typeof root.service.canExportEmlFor === "function" && root.service.canExportEmlFor(root.messageId)
         text: "Save as .eml"
         // Writes to the user's disk through the backend rather than through a
         // provider verb, so it goes straight to the service the way Open in
