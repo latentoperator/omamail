@@ -28,6 +28,9 @@ struct Service {
     /// Reports the item as present but locked, which the daemon answers over a
     /// connection that is still good.
     locked: Arc<AtomicBool>,
+    /// Reports the default collection as locked, the state a fresh login
+    /// leaves a blank-password keyring in.
+    collection_locked: Arc<AtomicBool>,
     unlock_denial: bool,
     unlocks: Arc<AtomicUsize>,
     /// Counts negotiated sessions, which is what tells a reused connection from
@@ -56,6 +59,13 @@ impl Service {
     fn read_alias(&self, _name: &str) -> OwnedObjectPath {
         path("/org/freedesktop/secrets/collection/default")
     }
+    #[zbus(property)]
+    fn collections(&self) -> Vec<OwnedObjectPath> {
+        vec![
+            path("/org/freedesktop/secrets/collection/default"),
+            path("/org/freedesktop/secrets/collection/unrelated"),
+        ]
+    }
     fn search_items(
         &self,
         _attributes: HashMap<String, String>,
@@ -63,7 +73,7 @@ impl Service {
         self.searches.fetch_add(1, Ordering::SeqCst);
         if self
             .failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                 left.checked_sub(1)
             })
             .is_ok()
@@ -93,6 +103,7 @@ impl Service {
             ));
         }
         self.locked.store(false, Ordering::SeqCst);
+        self.collection_locked.store(false, Ordering::SeqCst);
         Ok((objects, path("/")))
     }
 }
@@ -101,12 +112,13 @@ impl Service {
 /// write the daemon commits and the client never hears about.
 struct Collection {
     creates: Arc<AtomicUsize>,
+    locked: Arc<AtomicBool>,
 }
 #[zbus::interface(name = "org.freedesktop.Secret.Collection")]
 impl Collection {
     #[zbus(property)]
     fn locked(&self) -> bool {
-        false
+        self.locked.load(Ordering::SeqCst)
     }
     fn create_item(
         &self,
@@ -148,6 +160,8 @@ struct Fixture {
     searches: Arc<AtomicUsize>,
     unlocks: Arc<AtomicUsize>,
     creates: Arc<AtomicUsize>,
+    collection_locked: Arc<AtomicBool>,
+    unrelated_collection_locked: Arc<AtomicBool>,
     _daemon: Daemon,
 }
 impl Fixture {
@@ -162,6 +176,20 @@ impl Fixture {
     }
     fn with_refused_unlock() -> Self {
         Self::build(false, false, true, true, 0)
+    }
+    /// A missing item in a locked default collection: the state a fresh login
+    /// leaves behind, where a write has nothing to set and must create.
+    fn with_locked_collection() -> Self {
+        let fixture = Self::build(false, true, false, false, 0);
+        fixture.collection_locked.store(true, Ordering::SeqCst);
+        fixture
+    }
+    fn with_unrelated_locked_collection() -> Self {
+        let fixture = Self::build(false, false, false, false, 0);
+        fixture
+            .unrelated_collection_locked
+            .store(true, Ordering::SeqCst);
+        fixture
     }
     fn build(
         denial: bool,
@@ -193,6 +221,8 @@ impl Fixture {
         let searches = Arc::new(AtomicUsize::new(0));
         let unlocks = Arc::new(AtomicUsize::new(0));
         let locked = Arc::new(AtomicBool::new(locked));
+        let collection_locked = Arc::new(AtomicBool::new(false));
+        let unrelated_collection_locked = Arc::new(AtomicBool::new(false));
         let failures = Arc::new(AtomicUsize::new(failures));
         let creates = Arc::new(AtomicUsize::new(0));
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -211,6 +241,7 @@ impl Fixture {
                         denial,
                         missing,
                         locked,
+                        collection_locked: collection_locked.clone(),
                         unlock_denial,
                         unlocks: unlocks.clone(),
                         sessions: sessions.clone(),
@@ -225,6 +256,15 @@ impl Fixture {
                     "/org/freedesktop/secrets/collection/default",
                     Collection {
                         creates: creates.clone(),
+                        locked: collection_locked.clone(),
+                    },
+                )
+                .unwrap()
+                .serve_at(
+                    "/org/freedesktop/secrets/collection/unrelated",
+                    Collection {
+                        creates: creates.clone(),
+                        locked: unrelated_collection_locked.clone(),
                     },
                 )
                 .unwrap()
@@ -246,6 +286,8 @@ impl Fixture {
             searches,
             unlocks,
             creates,
+            collection_locked,
+            unrelated_collection_locked,
             _daemon: daemon,
         }
     }
@@ -509,11 +551,91 @@ fn credentials_native_linux_silently_unlocks_a_locked_item() {
         let service = SecretService::connect_with_existing(EncryptionType::Dh, connection)
             .await
             .unwrap();
-        find(&service, &attrs).await.map(|item| item.is_some())
+        find(&service, &attrs, Operation::Get).await.map(|item| item.is_some())
     });
 
     assert!(matches!(found, Ok(true)));
     assert_eq!(fixture.unlocks.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.searches.load(Ordering::SeqCst), 1);
+}
+
+/// A fresh login leaves a blank-password default collection locked. A write
+/// must unlock it and carry on rather than refuse: the refresh token is stored
+/// during sign-in, before any mailbox request, so refusing here is what made
+/// Gmail sign-in fail with a generic keyring error after Google had already
+/// handed back a token. The daemon counts the calls, so this asserts the
+/// unlock reached it and the write then reached CreateItem.
+#[test]
+#[ignore = "requires native dbus-daemon; mandatory in the Linux credential gate"]
+fn credentials_native_linux_a_locked_collection_is_unlocked_before_a_write() {
+    let fixture = Fixture::with_locked_collection();
+    let shared = Shared::new().unwrap();
+
+    assert!(matches!(
+        run_on(
+            &shared,
+            &key(),
+            Operation::Put(b"synthetic"),
+            || fixture.client(),
+            DEADLINE
+        ),
+        Err(Error::Unavailable)
+    ));
+    assert_eq!(
+        fixture.unlocks.load(Ordering::SeqCst),
+        1,
+        "the locked collection was refused instead of unlocked"
+    );
+    assert_eq!(
+        fixture.creates.load(Ordering::SeqCst),
+        1,
+        "the write never reached CreateItem"
+    );
+}
+
+/// A read on a locked collection answers unavailable immediately rather than
+/// mistaking the locked entries for a missing secret or prompting on an
+/// unattended startup.
+#[test]
+#[ignore = "requires native dbus-daemon; mandatory in the Linux credential gate"]
+fn credentials_native_linux_a_locked_collection_returns_unavailable_for_get() {
+    let fixture = Fixture::with_locked_collection();
+    let shared = Shared::new().unwrap();
+
+    assert!(matches!(
+        run_on(
+            &shared,
+            &key(),
+            Operation::Get,
+            || fixture.client(),
+            DEADLINE
+        ),
+        Err(Error::Unavailable)
+    ));
+    assert_eq!(
+        fixture.searches.load(Ordering::SeqCst),
+        1,
+        "search did not run before checking collection lock"
+    );
+}
+
+/// An unlocked item in the target collection must be read even if an unrelated
+/// collection on the Secret Service daemon is locked.
+#[test]
+#[ignore = "requires native dbus-daemon; mandatory in the Linux credential gate"]
+fn credentials_native_linux_unlocked_target_reads_with_unrelated_locked_collection() {
+    let fixture = Fixture::with_unrelated_locked_collection();
+    let attrs: HashMap<_, _> = key().attributes().unwrap().into_iter().collect();
+
+    let found = fixture.runtime.block_on(async {
+        let connection = fixture.client().await.unwrap();
+        let service = SecretService::connect_with_existing(EncryptionType::Dh, connection)
+            .await
+            .unwrap();
+        find(&service, &attrs, Operation::Get).await.map(|item| item.is_some())
+    });
+
+    assert!(matches!(found, Ok(true)));
     assert_eq!(fixture.searches.load(Ordering::SeqCst), 1);
 }
 

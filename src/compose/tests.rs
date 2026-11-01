@@ -21,6 +21,55 @@ fn saved(body: &str) -> Value {
     json!({"version":1,"active":true,"returnView":"reader","draft":{"body":body,"accountId":"one@example.org"}})
 }
 #[test]
+fn recovery_keeps_edits_and_attachment_metadata_but_not_untouched_signatures() {
+    for (draft, active) in [
+        (json!({"subject":" Plan "}), true),
+        (json!({"body":"\n\n"}), false),
+        (
+            json!({"body":"\n\nMaarten","placedBody":"\n\nMaarten"}),
+            false,
+        ),
+        (
+            json!({"body":"Something\n\nMaarten","placedBody":"\n\nMaarten"}),
+            true,
+        ),
+        (
+            json!({"body":"\n\nMaarten","placedBody":"\n\nMaarten","bodyWasEdited":true}),
+            true,
+        ),
+        (json!({"body":"\n\nMaarten"}), true),
+        (json!({"draftAttachments":[{"filename":"plan.txt"}]}), true),
+    ] {
+        let record = json!({"version":1,"active":true,"draft":draft});
+        assert_eq!(normalize(&record).unwrap()["active"], active, "{draft}");
+    }
+    let path = std::env::temp_dir().join("synthetic-plan.txt");
+    let record = json!({"version":1,"active":true,"returnView":"reader","draft":{
+        "accountId":"me@example.org","sourceDraftId":"draft-7","mode":"reply","threadId":"thread-7",
+        "body":"Reply\n\nMaarten","placedBody":"\n\nMaarten","extra":"drop",
+        "draftAttachments":[{"path":path,"filename":"plan.txt","data":"discard","extra":"drop"}]
+    },"parked":[{"subject":"Another draft"},{}]});
+    let result = normalize(&record).unwrap();
+    for key in [
+        "accountId",
+        "sourceDraftId",
+        "mode",
+        "threadId",
+        "body",
+        "placedBody",
+    ] {
+        assert_eq!(result["draft"][key], record["draft"][key], "{key}");
+    }
+    assert_eq!(result["returnView"], "reader");
+    assert_eq!(result["parked"].as_array().unwrap().len(), 1);
+    assert_eq!(result["parked"][0]["subject"], "Another draft");
+    assert!(result["draft"].get("extra").is_none());
+    let attachment = &result["draft"]["draftAttachments"][0];
+    assert_eq!(attachment["path"], json!(path));
+    assert_eq!(attachment["data"], "");
+    assert!(attachment.get("extra").is_none());
+}
+#[test]
 fn reply_quote_survives_active_and_parked_durable_recovery() {
     let temp = Temp::new();
     let quote = "On Monday, 合成 wrote:\r\n> \"quoted\" \\ text\n";
@@ -263,7 +312,8 @@ fn attachment_metadata_never_opens_paths_and_invalid_paths_write_nothing() {
 }
 #[test]
 fn js_oracle_parity_for_normalized_drafts() {
-    let fixtures = json!([saved("hello"),saved(" "),{"version":1,"active":true,"returnView":"calendar","draft":{"to":"a@example.org","draftAttachments":[{"path":"/tmp/synthetic","data":"discard","filename":"a","size":12}],"replyRecipients":[{"email":"a@example.org"}]},"parked":[{"subject":"parked","accountId":"other"},{}]}, {"version":1,"active":false}, {"version":2,"active":true}]);
+    let path = std::env::temp_dir().join("synthetic");
+    let fixtures = json!([saved("hello"),saved(" "),{"version":1,"active":true,"returnView":"calendar","draft":{"to":"a@example.org","draftAttachments":[{"path":path,"data":"discard","filename":"a","size":12}],"replyRecipients":[{"email":"a@example.org"}]},"parked":[{"subject":"parked","accountId":"other"},{}]}, {"version":1,"active":false}, {"version":2,"active":true}]);
     let script = r#"const fs=require('fs'),vm=require('vm');const ctx={};vm.createContext(ctx);vm.runInContext(fs.readFileSync('ui/tests/oracles/Recovery.js','utf8').replace(/^\.pragma library\s*/,''),ctx);const fixtures=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(fixtures.map(v=>ctx.parse(JSON.stringify(v)))));"#;
     use std::process::{Command, Stdio};
     let mut child = Command::new("node")

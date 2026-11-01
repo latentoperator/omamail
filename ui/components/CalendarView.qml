@@ -4,10 +4,12 @@ import QtQuick.Layouts
 import QtQuick.Window
 import qs.Commons
 import "../calendar/Calendar.js" as Calendar
+import "../backend/Plain.js" as Plain
 import "../keys/Keymap.js" as Keymap
 
 Item {
   id: root
+  readonly property string timeFormat: Qt.locale().timeFormat(Locale.ShortFormat)
 
   required property var controller
   required property color textColor
@@ -28,6 +30,10 @@ Item {
   property string selectedEventId: ""
   property bool monthPointerDown: false
   property Item hoveredMonthDay: null
+  function zoomHours(direction) {
+    if ((viewMode === "day" || viewMode === "week") && !detailOpen) weekView.zoomHours(direction)
+  }
+
   function updateMonthHover() {
     if (overflowHover.hovered) return
     if (!monthHover.hovered || monthPointerDown || viewMode !== "month" || detailOpen) {
@@ -101,7 +107,8 @@ Item {
   readonly property var monthNames: ["January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December"]
   readonly property var weekdayNames: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-  readonly property string todayIso: Calendar.isoDate(new Date())
+  // Date alone has no binding dependency: use the shared clock to cross midnight.
+  readonly property string todayIso: Calendar.isoDate(new Date(controller ? controller.nowMs : Date.now()))
   readonly property var viewOptions: ["Day", "Week", "Month", "Agenda"].map(function(label) {
     var binding = Keymap.bindingsFor("calendar").filter(function(row) { return row.id === "calendar" + label })[0]
     return { mode: label.toLowerCase(), label: label + " (" + Keymap.displayFor(binding) + ")" }
@@ -115,7 +122,7 @@ Item {
   Binding {
     target: root.controller
     property: "clockRunning"
-    value: root.visible && root.viewMode !== "month"
+    value: root.visible
     when: root.controller !== null
   }
 
@@ -204,8 +211,11 @@ Item {
     selectedEventId = Calendar.eventKey(values[index])
   }
 
-  function activateEvent(event, alreadyDetailed) {
+  // The event comes from a row's `modelData`, or through the week view's `eventActivated` signal on Qt 6.12, as a
+  // reference object whose guests are a sequence the detail reads as nobody: made plain, they are a list again.
+  function activateEvent(crossed, alreadyDetailed) {
     monthOverflow.close()
+    var event = Plain.plain(crossed)
     if (!event) return
     var serial = ++detailReadSerial
     selectedEventId = Calendar.eventKey(event)
@@ -827,8 +837,7 @@ Item {
                     var event = monthEvent.eventData
                     if (!event) return ""
                     var time = event.start && !event.start.allDay
-                      ? Calendar.two(new Date(event.start.ms).getHours()) + ":"
-                        + Calendar.two(new Date(event.start.ms).getMinutes()) + " " : ""
+                      ? Calendar.timeLabel(event.start.ms, root.timeFormat) + " " : ""
                     var title = String(event.summary || "Untitled event")
                     return monthEvent.width < Style.space(140) ? title + (time ? " · " + time.trim() : "") : time + title
                   }
@@ -923,7 +932,7 @@ Item {
             anchors.leftMargin: Style.space(spanBar.modelData.continuesBefore ? 18 : 6)
             anchors.rightMargin: Style.space(spanBar.modelData.continuesAfter ? 18 : 6)
             verticalAlignment: Text.AlignVCenter
-            text: (spanBar.eventData.start.allDay ? "" : Calendar.timeLabel(spanBar.eventData.start.ms) + " ")
+            text: (spanBar.eventData.start.allDay ? "" : Calendar.timeLabel(spanBar.eventData.start.ms, root.timeFormat) + " ")
               + String(spanBar.eventData.summary || "Untitled event")
             textFormat: Text.PlainText
             elide: Text.ElideRight
@@ -968,6 +977,7 @@ Item {
     }
 
     WeekCalendarView {
+      id: weekView
       width: parent.width
       height: parent.height - y
        visible: root.viewMode === "day" || root.viewMode === "week"
@@ -1040,8 +1050,9 @@ Item {
           }
           Text {
             width: parent.width
-            text: Qt.formatDateTime(new Date(agendaRow.modelData.start.ms), agendaRow.modelData.start.allDay ? "ddd, MMM d" : "ddd, MMM d · hh:mm")
-              + (agendaRow.modelData.start.allDay ? " · All day" : "")
+            text: agendaRow.modelData.start.allDay
+              ? Qt.formatDate(new Date(agendaRow.modelData.start.ms), "ddd, MMM d") + " · All day"
+              : Calendar.dateTimeLabel(agendaRow.modelData.start.ms, "ddd, MMM d", root.timeFormat, " · ")
             textFormat: Text.PlainText
             color: root.dimColor
             font.family: root.panelFontFamily
@@ -1170,9 +1181,12 @@ Item {
                 y: overflowTitle.y + overflowTitle.height + Style.space(2)
                 width: overflowTitle.width
                 text: overflowEvent.modelData.start.allDay ? "All day"
-                  : Qt.formatDateTime(new Date(overflowEvent.modelData.start.ms), Calendar.spansMultipleDays(overflowEvent.modelData) ? "d MMM HH:mm" : "HH:mm")
-                    + " – " + Qt.formatDateTime(new Date(overflowEvent.modelData.end.ms), Calendar.spansMultipleDays(overflowEvent.modelData) ? "d MMM HH:mm" : "HH:mm")
+                  : Calendar.spansMultipleDays(overflowEvent.modelData)
+                    ? Calendar.dateTimeLabel(overflowEvent.modelData.start.ms, "d MMM", root.timeFormat)
+                      + " – " + Calendar.dateTimeLabel(overflowEvent.modelData.end.ms, "d MMM", root.timeFormat)
+                    : Calendar.timeRangeLabel(overflowEvent.modelData.start.ms, overflowEvent.modelData.end.ms, root.timeFormat, " – ")
                 textFormat: Text.PlainText
+                wrapMode: Text.Wrap
                 color: root.dimColor
                 font.family: root.panelFontFamily
                 font.pixelSize: Style.font.caption

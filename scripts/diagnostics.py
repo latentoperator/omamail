@@ -52,7 +52,7 @@ cache_store_too_large cache_too_many_files cache_unavailable cache_unsafe_path
 calendar_ambiguous_invitation calendar_attendance_unconfirmed calendar_attendee_not_found
 calendar_auth_refused calendar_auth_required calendar_conflict calendar_input_too_large
 calendar_invalid_input calendar_invalid_operation calendar_invalid_response calendar_invalid_url
-calendar_invitation_cancelled calendar_invitation_not_found calendar_keyring_failed
+calendar_invitation_cancelled calendar_invitation_not_found calendar_invitation_series_required calendar_keyring_failed
 calendar_network_failed calendar_not_found calendar_organizer_mismatch calendar_origin_refused
 calendar_password_invalid calendar_password_missing calendar_provider_unsupported
 calendar_reminder_not_found calendar_reminders_invalid calendar_reminders_unavailable
@@ -92,6 +92,12 @@ jmap_settings_missing jmap_spam_unavailable jmap_stream_closed jmap_stream_limit
 jmap_stream_missing jmap_stream_poll_pending jmap_submission_failed jmap_submission_unconfirmed
 jmap_timeout jmap_transport_unavailable jmap_unauthorized jmap_unsupported_sort
 jmap_update_failed jmap_upload_failed
+m365_access_denied m365_attachment_not_found m365_auth_failed m365_bad_response m365_cancelled
+m365_consent_required m365_draft_unconfirmed m365_folder_unavailable m365_invalid_request
+m365_invalid_response m365_message_not_found m365_message_too_large m365_network_failed
+m365_not_a_draft m365_request_limit m365_response_too_large m365_send_failed m365_send_not_attempted
+m365_send_rejected m365_server_error m365_signed_out m365_tenant_invalid m365_throttled
+m365_timeout m365_tls_failed m365_wrong_account
 mail_account_invalid mail_account_unknown mail_action_destination_unavailable
 mail_action_invalid_change mail_action_invalid_target mail_action_target_limit
 mail_action_target_unknown mail_action_unavailable mail_auth_failed mail_check_timeout
@@ -148,6 +154,34 @@ worker_failed'''.split()) | {
 }
 METHODS = set(json.loads((ROOT / 'backend-api.json').read_text())['methods']) | {'backend.request'}
 
+DETAIL_FIELDS = {
+    'provider': {'google', 'microsoft', 'caldav', 'icloud'},
+    'operation': {'list', 'get', 'lookup', 'instances', 'create', 'update', 'delete', 'move', 'import', 'saveInvitation', 'attendance'},
+    'stage': {'validation', 'authentication', 'request', 'response'},
+    'field': {'start', 'end', 'start.dateTime', 'end.dateTime', 'start.timeZone', 'end.timeZone', 'recurrence', 'iCalUID', 'calendarId', 'eventId', 'timeMin', 'timeMax'},
+    'reason': set('''badRequest invalid invalidParameter required authError
+        forbidden insufficientPermissions notFound duplicate conditionNotMet
+        rateLimitExceeded userRateLimitExceeded quotaExceeded dailyLimitExceeded
+        usageLimits backendError internalError timeRangeEmpty updatedMinTooLongAgo
+        fullSyncRequired forbiddenForNonOrganizer participantIsNeitherOrganizerNorAttendee accessNotConfigured
+        ErrorInvalidRequest ErrorInvalidProperty ErrorInvalidIdMalformed
+        ErrorAccessDenied InvalidAuthenticationToken ErrorItemNotFound
+        ErrorIrresolvableConflict TooManyRequests ErrorQuotaExceeded
+        ErrorInternalServerError ErrorServiceUnavailable'''.split()),
+}
+DETAIL_METHODS = {'calendar.request', 'calendar.saveInvitation', 'calendar.attendance', 'request.upload'}
+
+
+def clean_details(data):
+    if not isinstance(data, dict):
+        return {}
+    result = {key: data[key] for key, allowed in DETAIL_FIELDS.items()
+              if isinstance(data.get(key), str) and data[key] in allowed}
+    status = data.get('httpStatus')
+    if type(status) is int and 100 <= status <= 599:
+        result['httpStatus'] = status
+    return result
+
 
 def clean(event, existing=False):
     if not isinstance(event, dict):
@@ -161,10 +195,15 @@ def clean(event, existing=False):
     timestamp = event.get('time') if existing else None
     if not isinstance(timestamp, str) or not re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', timestamp):
         timestamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-    return {'time': timestamp,
+    result = {'time': timestamp,
             'method': method if isinstance(method, str) and method in METHODS else 'backend.request',
             'code': code if type(code) is int and -32768 <= code <= 32767 else None,
-            'message': message if isinstance(message, str) and message in MESSAGES else 'unknown_error'}
+             'message': message if isinstance(message, str) and message in MESSAGES else 'unknown_error'}
+    if result['method'] in DETAIL_METHODS and result['message'] != 'unknown_error':
+        details = clean_details(error.get('data'))
+        if details:
+            result['data'] = details
+    return result
 
 
 def check(fd, directory=False):
@@ -265,7 +304,7 @@ def main(mode):
         report += 'plugin: ' + str(manifest['version']) + '\n'
         report += 'pinned backend: ' + (ROOT / 'backend-version').read_text().strip() + '\n'
         report += 'API revision: ' + str(json.loads((ROOT / 'backend-api.json').read_text())['apiVersion']) + '\n'
-        report += '\nRecent backend errors (only known error identifiers are retained):\n'
+        report += '\nRecent backend errors (known identifiers and allowlisted calendar context only; no raw provider text):\n'
         report += '\n'.join(json.dumps(event, ensure_ascii=True) for event in entries) or '(none recorded)'
         write(fd, 'report.txt', report + '\n')
     prompt = ('Diagnose an Omamail error using the local report at ' + str(folder / 'report.txt')

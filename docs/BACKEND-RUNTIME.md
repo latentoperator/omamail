@@ -19,8 +19,13 @@ directory, `scripts/install-backend.sh` requests the same installation and
 access. Linux x86_64 and aarch64 are supported. Installation downloads only from
 the pinned release in `huacnlee/omamail`, verifies SHA256SUMS and the strict archive
 layout, checks the candidate executable's version and atomically replaces the
-old executable. A failed installation preserves the working runtime. Checksums
-protect integrity, not against a compromised publisher.
+old executable. The download itself follows the standard `HTTPS_PROXY` and
+`NO_PROXY` environment variables through urllib's default proxy discovery, so
+networks that require an outbound HTTP proxy can install the backend; the
+release URLs are always HTTPS, the proxy only carries the encrypted transport,
+and SOCKS-style proxies are not supported. A failed installation preserves the
+working runtime. Checksums protect integrity, not against a compromised
+publisher.
 
 `python3 scripts/backend-runtime.py enable-cli` explicitly creates
 `~/.local/bin/omamail` as a symlink to that same private executable; it refuses
@@ -102,9 +107,13 @@ The isolated provider launch preserves model/authentication configuration while 
 
 Proposal cards show their saved From, To and optional Cc, Bcc and Reply-To. If routing in the corresponding open composer changes, direct card sending is disabled and rechecked at dispatch. Use this version applies subject/body without replacing the edited recipients; the normal composer Send then reviews and sends the current routing.
 
+## API 7 sender name for IMAP and Outlook
+
+An IMAP or Outlook account entry may carry a top-level `senderName`. `mail.send` uses it, trimmed, as the display name of the mailbox's own address in the From header; aliases keep their own names. An empty or missing value sends the bare address, as before. Starting at API 7 the UI offers the name as "Your name" in Settings → Mailboxes and on the IMAP and Outlook setup pages, and the composer names the From address with it. On an older backend the fields are hidden and the composer leaves the stored value unused, so composer and agent sends both carry the bare address rather than disagreeing.
+
 ## API 6 account-wide IMAP search
 
-IMAP and Outlook text searches, and IMAP address searches, resolve to `search:<criteria>`. IMAP All mail resolves to `search:ALL`; folder queries remain folder-scoped. The IMAP UI keeps Archive on API 5 and exposes All mail starting at API 6.
+IMAP and Outlook text searches, and IMAP address searches, resolve to `search:<criteria>`. IMAP All mail resolves to `search:ALL`; folder queries remain folder-scoped. The IMAP UI keeps Archive on API 5 and exposes All mail starting at API 6. Microsoft 365 text searches resolve to `text:<words>` (see its API 8 section below).
 
 `imap.list` and `imap.listContinue` return an empty `page` plus an opaque work `continuation` until the scan and page assembly have finished. Continue with the same account, query, request token and original `pageToken`, including when a later page needs a new scan. Partial scans are not a globally newest-first page. Expired or mismatched work continuations return `imap_search_expired`; refresh starts a new search.
 
@@ -115,6 +124,30 @@ Completed results are cached for five minutes after scan completion, subject to 
 Each call advances at most four scan or page-verification folders, with at most four concurrent workers per account and a 12-second worker deadline inside the existing 22-second request deadline. The scanner captures UIDNEXT, streams a compact UID inventory through individually framed FETCH responses, and issues SEARCH and metadata FETCH operations in windows of at most 4096 existing UIDs. This bounds SEARCH response lines below the 64 KiB transport limit even for ten-digit UIDs, without walking empty numeric UID gaps. Scans are limited to 2048 folders, one million inventoried UIDs and 250,000 matching folder/UID identities; the existing 32 MiB per-command response ceiling also applies. Oversized responses fail explicitly instead of presenting incomplete results as complete. Inventory storage is released after scanning; at most 16 snapshots with a combined budget of two million inventory/result entries are retained. In-progress scans expire after five idle minutes; completed-cache reads do not extend their lifetime. No search state is written to disk.
 
 Search includes aggregate All Mail destinations and excludes Trash/Junk membership from aggregate results. Cross-folder copies are collapsed using server-provided `EMAILID`/`X-GM-MSGID`. A generic server that advertises `\All` but no server identity is searched through its `\All` mailbox alone, because RFC 6154 defines it as every message in the store; scanning physical folders as well would only add copies that cannot be matched without reading them. Its Message-ID header and RFC822.SIZE nominate possible overlaps between All and Trash/Junk, then SHA-256 of complete message bytes verifies those candidates before excluding any aggregate result. Verification reads at most 64 candidates and 8 MiB per folder step with `BODY.PEEK[]` and retains only digests; a candidate larger than 8 MiB is not read and stays in the results. A server with neither `\All` nor a server identity preserves folder/UID copies, so overlapping folders may produce duplicate rows. A sender-written Message-ID, headers or size alone never suppress a result. Copies within one physical folder remain distinct. `mail.list` follows search continuations for at most 120 seconds; other IMAP listings still accept one continuation.
+
+## Microsoft 365 mailboxes (API 8)
+
+The `m365.*` methods are the unreleased API 8 step: `m365.signInBegin`, `m365.signInPoll`, `m365.signOut`, `m365.verify`, `m365.list`, `m365.messages`, `m365.read`, `m365.attachment`, `m365.modify`, `m365.trash`, `m365.untrash`, `m365.send`, `m365.saveDraft`, `m365.deleteDraft`, `m365.sendAs`, `m365.invalidate` and `m365.cancel`. A feature gates on API 8 or newer; an older backend answers `backend_needs_update`.
+
+Queries are `role:<inbox|sent|drafts|archive|junk|trash> [unseen] [flagged]` or `text:<words>`, which Graph's `$search` reads as words (a text search leaves Trash and Junk out); a Flagged or Unread view lists the Inbox only. `m365.signInBegin` and `m365.signOut` take the Application (client) ID as `clientId`: the backend has no default. `m365.signInBegin` signs in at the tenant the address's domain names and, if Microsoft does not know the domain as a tenant, once more at `organizations`; refreshes ask the same way. `m365.signInPoll` asks Microsoft at most once per interval whatever its caller's rhythm, answers `pending`, `signedIn`, `declined`, `expired` or `failed`, and has stored the refresh token in the keyring before it says `signedIn`; no token or device code is ever returned. A poll whose token request or keyring save outlasts its 24 seconds answers `pending` with the warning `m365_exchange_running` while the exchange goes on, and the same `requestId` answers the outcome afterwards. `m365.signOut` ends the sign-ins under way of that account and `clientId` only. It and `m365.invalidate` wait at most 20 seconds for the mailbox's refresh lane, which a refresh holds while its keyring save waits to be unlocked, and then answer `m365_timeout`: a sign-out so answered may not have been done. `m365.list` answers `{page, rows}` (the rows are the header-only resources of the page, which `m365.messages` serves from memory for a minute) and `m365.cancel` ends a call made with its `requestToken`. `m365.saveDraft {accountId, raw, draftId?}` answers `{saved, warning, id}` like `imap.saveDraft` (plus the new draft's `id`), or fails with `m365_draft_unconfirmed` when Graph may have made the draft without saying so, and `m365.deleteDraft {accountId, id}` answers `{}` or refuses anything that is not a draft with `m365_not_a_draft`. Calendar requests for an `m365:` account take their Graph token from the same sign-in.
+
+## Shipped Google OAuth client (API 9)
+
+Release backends compile in a Google desktop OAuth client from the repository secrets `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. The release workflow passes them as `OMAMAIL_GOOGLE_CLIENT_ID` and `OMAMAIL_GOOGLE_CLIENT_SECRET` only to the `cargo build --release` steps; test steps, CI and development builds never receive them and ship no client. Every release contract run passes `--shipped-google-client`, so a missing or malformed secret fails the release instead of publishing a build without the client. Google treats a desktop client's secret as not confidential: this keeps the values out of the source tree and logs, not out of the binary.
+
+`auth.builtinClient {}` answers `{clientId, clientSecret}`, both empty strings when the build ships none. The UI asks once per account manager on API 9 or newer and validates the answer itself. The user's own client in `credentials.json` always wins, then a client shared from another account, then the shipped one; the backend's Gmail token refresh resolves the same order. Only an absent file, or one naming no usable client, falls back to the shipped client: an unsafe, oversized or malformed file stays an error.
+
+## Calendar error diagnostics (API 10)
+
+Calendar RPC errors retain their existing `code` and `message` and may add `data` with `provider`, `operation`, `stage`, `httpStatus`, `reason` and `field`. Context distinguishes local validation and token acquisition from calendar HTTP, and records the actual operation (`lookup`, `import`, `update`, etc.) within an invitation save. Network timeouts use `calendar_timeout`; other transport failures retain `calendar_network_failed`. Fields are optional: missing HTTP status means no HTTP response was captured, and an absent reason does not imply that the provider supplied none.
+
+Only fixed provider/operation/stage names, an integer HTTP status, exact allowlisted Google/Graph reason codes and known field names cross the RPC boundary. Google field hints come from an allowlisted `location` or an exact known fixed message (for example an invalid start time zone maps to `start.timeZone`). Raw error messages, response headers, URLs, account/event IDs, tokens and mail content are excluded. Error bodies are read only up to 16 KiB with a one-second diagnostic deadline; oversized, malformed, truncated or stalled bodies preserve the original status/error without a reason. Each RPC owns an async-local capture scope, including uploaded calls, so concurrent requests and cancelled scopes cannot share error context. Direct Rust library callers retain string errors.
+
+The invitation card uses these details only on API 10 or newer, with a generic fallback on older backends. It distinguishes authentication, refused access, invalid requests, conflicts, throttling and temporary failures; uncertain saves advise refreshing before retrying. A failure also exposes the existing status-bar diagnosis action. Retry remains explicit and calendar-only, without sending another RSVP. Diagnostic recording and report regeneration independently allowlist the structured fields, so an edited or older log cannot inject provider text into a report.
+
+One-off invitation exports (including individual recurring occurrences) send their already-resolved UTC timestamps without the original ICS `TZID`. Inline `VTIMEZONE` names may be Windows/custom identifiers rather than Google-compatible IANA zones; omitting that redundant label preserves the exact start/end instants. Recurring series still require a named zone so future occurrences retain daylight-saving behavior; unresolved times remain refused. This payload correction also works with API 9.
+
+Google private imports require the destination calendar to be the organizer or an attendee. The backend includes exactly that calendar as an attendee, resolving `primary` to the signed-in account, with the chosen response. It never copies guests from the invitation. Existing managed copies update only this participant using `attendeesOmitted`, preserve other attendees, and retain `sendUpdates=none`; creation still uses the private `events.import` endpoint. The safe reason vocabulary includes `participantIsNeitherOrganizerNorAttendee` so this failure is distinguishable from invalid times and access errors.
 
 ## Released and unreleased: one step ahead of the pin
 
@@ -229,9 +262,9 @@ a contents-write token as described above.
 
 ## Standalone security gates
 
-A standalone release needs a separate security verdict for macOS arm64, Linux x86_64, and Windows x64. The verdict is **PASS** only when the release commit has completed its native job and every boundary below was exercised on that runtime. A shared test on another operating system, successful compilation, or source inspection alone leaves that platform **NOT VERIFIED**. A failing boundary is **BLOCK** and prevents publication.
+A standalone release requires successful automated native CI for macOS arm64, Linux x86_64, and Windows x64. Those jobs provide evidence for a scoped security assessment; a green job does not itself establish a security verdict or prove that every boundary below was exercised. Assess the actual coverage, including fixture limitations, before reporting **PASS**, **BLOCK** or **NOT VERIFIED** for an affected boundary. A demonstrated failure blocks publication. Contributor and reviewer checks follow [CONTRIBUTING.md](../CONTRIBUTING.md#before-you-write-anything), which requires neither contributor hands-on testing nor local macOS/Windows runs.
 
-| Boundary | Evidence required on each native runtime |
+| Boundary | Evidence to assess in native CI results |
 | --- | --- |
 | Credentials | Native Keychain, Secret Service, or Credential Manager success, missing-item, denial, validation, and bounded-prompt cases; secrets absent from argv, settings, and diagnostics. |
 | Untrusted mail and URLs | Plain-text metadata, HTML/resource sanitization, public-address DNS pinning, HTTPS/TLS, redirect, proxy, deadline, and response-size cases using controlled targets. |
@@ -257,7 +290,7 @@ ctest --test-dir build/app --output-on-failure
 QT_QPA_PLATFORM=offscreen qmltestrunner -input app/tests/qml/tst_host_contract.qml -import app/qml/imports -import ui
 ```
 
-These commands establish evidence only for the operating system that ran them. Package and installer acceptance must use the archive produced on its native release runner; macOS and Linux use `app/scripts/package-release.sh`, while Windows uses `app/scripts/package-release.ps1`.
+Run the applicable local checks on Linux, following [CONTRIBUTING.md](../CONTRIBUTING.md#before-you-write-anything). These commands establish evidence only for the operating system that ran them. Automated package and installer acceptance uses the archive produced on its native release runner; macOS and Linux use `app/scripts/package-release.sh`, while Windows uses `app/scripts/package-release.ps1`.
 
 `make install-plugin` removes the old private backend and its local-build marker,
 then links and reloads only the plugin. It does not compile or download a backend.
