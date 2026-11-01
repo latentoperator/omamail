@@ -108,14 +108,7 @@ fn closed_output_cancels_when_input_submission_is_backpressured() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let port = listener.local_addr().unwrap().port();
-    let mut child = sandbox
-        .command()
-        .arg("serve")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child = sandbox.spawn();
     let mut input = child.stdin.take().unwrap();
     // Each request waits for a synthetic peer's greeting. More than the 32
     // running and 16 queued frames fills the submission queue without replies.
