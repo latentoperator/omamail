@@ -26,7 +26,8 @@ function capabilities(values) {
     webBox: raw.webBox === true,
     search: raw.search === true,
     manageLabels: raw.manageLabels === true,
-    send: raw.send === true
+    send: raw.send === true,
+    emlExport: raw.emlExport === true
   }
 }
 

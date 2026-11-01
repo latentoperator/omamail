@@ -30,6 +30,7 @@ const CAPABILITIES: &[&str] = &[
     "search",
     "manageLabels",
     "send",
+    "emlExport",
 ];
 
 struct Provider {
@@ -48,6 +49,7 @@ const IMAP_CAPABILITIES: &[&str] = &[
     "batch",
     "search",
     "send",
+    "emlExport",
 ];
 
 const PROVIDERS: &[Provider] = &[

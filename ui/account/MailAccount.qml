@@ -13,6 +13,7 @@ import "../message/Outbox.js" as Outbox
 import "Model.js" as Model
 import "Accounts.js" as Accounts
 import "Aliases.js" as Aliases
+import "MessageActions.js" as MessageActions
 import "../providers/Registry.js" as Provider
 import "../providers/ImapProtocol.js" as Imap
 import "../providers/OAuth.js" as OAuth
@@ -136,6 +137,8 @@ Item {
   // to it, with the row already moved.
   readonly property bool canArchive: Provider.can(providerId, "archive", capabilityRefusals)
   readonly property bool canReportSpam: Provider.can(providerId, "spam", capabilityRefusals)
+  // Provider ceiling only; the service checks the backend advertises it.
+  readonly property bool canExportEml: Provider.can(providerId, "emlExport", capabilityRefusals)
   readonly property bool canStar: Provider.can(providerId, "star", capabilityRefusals)
   readonly property bool canMove: Provider.can(providerId, "move", capabilityRefusals)
   readonly property bool hasLabels: Provider.can(providerId, "labels")
@@ -2032,6 +2035,13 @@ Item {
     return runNativeAction([], "markRead", false, false, true)
   }
 
+  // Save the message's original bytes as .eml; MessageActions.accountExport
+  // does the work so this file stays under the repository's size ceiling.
+  property bool exportingEml: false
+  property string exportingEmlId: ""
+  signal emlSaved(var result)
+  function exportEml(id, directory) { return MessageActions.accountExport(root, id, directory) }
+
   function actMany(ids, action, completion) { return batchAction.run(ids, action, completion) }
 
   BatchAction {
@@ -3015,7 +3025,8 @@ Item {
   Timer {
     id: noticeTimer
     interval: 4000
-    onTriggered: root.actionStatus = ""
+    // A busy export notice outlives the timer; the write can take longer.
+    onTriggered: if (!root.exportingEml) root.actionStatus = ""
   }
 
 

@@ -14,6 +14,7 @@ import "settings/Settings.js" as Settings
 import "agent/Agent.js" as Agent
 
 import "account/Accounts.js" as Accounts
+import "account/MessageActions.js" as MessageActions
 import "account/Model.js" as Model
 import "account/Unified.js" as Unified
 import "providers/Registry.js" as Provider
@@ -101,6 +102,7 @@ Item {
 
   // Features gate on fixed API revisions.
   readonly property bool backendNeedsUpdate: backend.needsUpdate
+  readonly property bool backendCanExportEml: MessageActions.backendCanExportEml(rustBackend)
   // Event suggestions require API 2 regardless of when that API is released.
   readonly property bool backendCanSuggestEvents: backend.ready && backend.apiVersion >= 2
   readonly property bool backendCanCheckMicrosoftConnection: backend.ready && backend.apiVersion >= 5
@@ -508,12 +510,12 @@ Item {
     return true
   }
 
-  function chooseFiles(callback) {
+  function chooseFiles(callback, folder) {
     if (platform && typeof platform.chooseFiles === "function")
-      return platform.chooseFiles(callback)
+      return !folder && platform.chooseFiles(callback)
     var request = hostProcessComponent.createObject(root, {
       operation: "result", callback: callback,
-      command: [root.pluginDir + "/scripts/attachment.sh", "pick"]
+      command: [root.pluginDir + "/scripts/attachment.sh", folder ? "folder" : "pick"]
     })
     if (!request) {
       if (typeof callback === "function") callback(({ok:false,error:"No file picker is available"}))
@@ -1086,17 +1088,10 @@ Item {
 
   function saveAccounts(opts) {
     if (!accountsLoaded) return
-    // A nameless row is setup state, never a mailbox. There is no legitimate
-    // path that persists only one — Add waits for configureAccount, and the UI
-    // does not remove the final saved account — so refusing this write is the
-    // last line of defence against replacing every account with first-run.
-    //
-    // Only the mailboxes, never the form's own working row: a save triggered by
-    // one account used to carry whatever draft happened to be open along with
-    // it, stranding a row on disk that nothing could select or remove. The
-    // guard is applied to that stripped list rather than to what is in memory,
-    // so it is testing the bytes that are about to be written instead of
-    // trusting the two to agree.
+    // A nameless row is setup state, never a mailbox: refusing to persist one
+    // is the last defence against replacing every account with first-run.
+    // Save only saved mailboxes, never the form's working row, and guard the
+    // stripped list so the check tests the bytes about to be written.
     var writable = Accounts.savedOnly(accountList)
     if (!Accounts.hasSavedAccounts(writable)) return
     // And no mailbox the list could name may go missing on the way to the
@@ -2213,31 +2208,17 @@ Item {
   function selectLabel(name, labelId) {
     if (current && !unified) current.selectLabel(name, labelId)
   }
-  // Asked of the mailbox that owns the row rather than of the visible one: in
-  // a merged list `e` and `s` reach `act` for a message whose provider may not
-  // have the verb, and the refusal has to name that provider.
-  function refuseUnavailableAction(action, id) {
-    var host = id === undefined ? current : hostForId(id)
-    if (!host) host = current
-    return host ? host.refuseUnavailableAction(action) : true
-  }
-  function act(id, action, quiet, memberOnly) {
-    unifiedBatchAction.clear()
-    var host = hostForId(id)
-    return host ? host.act(sourceIdFor(id), action, quiet, memberOnly) : false
-  }
-  function toggleStar(id) {
-    unifiedBatchAction.clear()
-    var host = hostForId(id)
-    if (host) host.toggleStar(sourceIdFor(id))
-  }
-  function markAllRead() {
-    if (!unified) {
-      if (current) current.markAllRead()
-      return
-    }
-    eachHost(function(host) { host.markAllRead() })
-  }
+  function refuseUnavailableAction(a, id) { return MessageActions.refuseUnavailableAction(root, a, id) }
+  function act(id, a, q, m) { unifiedBatchAction.clear(); return MessageActions.act(root, id, a, q, m) }
+  function toggleStar(id) { unifiedBatchAction.clear(); MessageActions.toggleStar(root, id) }
+  function canExportEmlFor(id) { return MessageActions.canExportEmlFor(root, id) }
+  function accountForMessage(id) { return MessageActions.accountForMessage(root, id) }
+  function exportEmlFor(a, id) { return MessageActions.exportEmlFor(root, a, id) }
+  function exportEmlToFolder(a, id) { return MessageActions.exportEmlToFolder(root, a, id) }
+  signal emlSaved(var result)
+  function exportEml(id) { return MessageActions.exportEml(root, id) }
+  function exportFromView(v, c) { return MessageActions.exportFromView(root, v, c) }
+  function markAllRead() { MessageActions.markAllRead(root) }
   UnifiedBatchAction { id: unifiedBatchAction; service: root }
   function actMany(ids, action, completion) {
     if (!unified) return current ? current.actMany(ids, action, completion) : false
@@ -2670,6 +2651,7 @@ Item {
       onReplySent: function(sendId) { root.replySent(String(sendId || "")) }
       onReplyFailed: function(sendId) { root.forwardReplyFailure(index, sendId) }
       onMonitoredMigrated: function(ids) { root.setMonitoredIds(index, ids) }
+      onEmlSaved: function(result) { root.emlSaved(result) }
 
       // What a merged list is made of, and everything a merged list says
       // about itself. `recount` is not enough and is deliberately not used:
