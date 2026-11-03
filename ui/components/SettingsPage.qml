@@ -934,7 +934,7 @@ Column {
     implicitHeight: Math.max(spellingText.implicitHeight, spellingSwitch.implicitHeight)
       + Style.space(16)
     radius: Style.cornerRadius
-    color: Style.normalFillFor(root.textColor, root.accentColor)
+    color: Paint.normalFillFor(root.textColor, root.accentColor)
 
     Column {
       id: spellingText
