@@ -9,6 +9,7 @@ var DEFAULTS = ({
   heavyMessageRendering: Html.HEAVY_MESSAGE_RENDERING_DEFAULT,
   contentDirection: Direction.MODE_DEFAULT,
   appearance: Appearance.MODE_DEFAULT,
+  appTheme: "",
   defaultQuery: "in:inbox",
   notifyNewMail: "On",
   oauthPort: 9481,

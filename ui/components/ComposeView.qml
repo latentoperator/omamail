@@ -11,6 +11,8 @@ import "../compose/Recipients.js" as Recipients
 import "../compose/Senders.js" as Senders
 import "../compose/Spelling.js" as Spelling
 import "../agent/Agent.js" as Agent
+import "../theme"
+import "../kit"
 
 // Composing takes over the whole content area of the one window rather than
 // opening a second one: Omarchy's panel mechanism would give an extra window
@@ -1425,13 +1427,13 @@ DropArea {
         text: root.fromEmail
         foreground: root.textColor
         accent: root.accentColor
-        background: Style.normalFillFor(root.textColor, root.accentColor)
+        background: Paint.normalFillFor(root.textColor, root.accentColor)
         bordered: true
         fontFamily: root.panelFontFamily
         fontSize: Style.font.bodySmall
         verticalPadding: Style.spacing.inputPaddingY
         leftAlign: true
-        selected: fromMenu.opened
+        chosen: fromMenu.opened
         enabled: root.canChooseFrom
         onClicked: root.toggleFromMenu()
 
@@ -1980,9 +1982,9 @@ DropArea {
         implicitHeight: Style.space(42)
         radius: Style.cornerRadius
         color: root.fromEmail.toLowerCase() === String(modelData.email || "").toLowerCase()
-          ? Style.selectedFillFor(root.textColor, root.accentColor)
+          ? Paint.selectedFillFor(root.textColor, root.accentColor)
           : (fromHover.hovered
-            ? Style.hoverFillFor(root.textColor, root.accentColor) : "transparent")
+            ? Paint.hoverFillFor(root.textColor, root.accentColor) : "transparent")
 
         Column {
           anchors.left: parent.left
@@ -2090,7 +2092,7 @@ DropArea {
       horizontalAlignment: root.composeAlignment
       onEffectiveHorizontalAlignmentChanged: Qt.callLater(function() { root.spellingLayoutRevision += 1 })
       color: root.textColor
-      selectionColor: Style.selectionFillFor(root.textColor, root.accentColor)
+      selectionColor: Paint.selectionFillFor(root.textColor, root.accentColor)
       selectedTextColor: root.textColor
       font.family: root.panelFontFamily
       font.pixelSize: Style.font.bodySmall
