@@ -1,9 +1,10 @@
 import QtQuick
 import Quickshell
 import qs.Commons
-import qs.Commons as Commons
 import qs.Ui
 import "../account/MessageActions.js" as MessageActions
+import "../theme"
+import "../kit"
 
 // Says that a Save as .eml finished, and where the file went. The status line
 // says it too, but a caption at the window's edge was easy to miss for a file
@@ -17,9 +18,9 @@ Rectangle {
   // seven, because App.qml sits against the repository's file-size ceiling.
   required property var app
   readonly property var service: app ? app.service : null
-  readonly property color textColor: app ? app.foreground : Commons.Color.foreground
+  readonly property color textColor: app ? app.foreground : Paint.foreground
   readonly property color dimColor: app ? app.dim : textColor
-  readonly property color accentColor: app ? app.accent : Commons.Color.accent
+  readonly property color accentColor: app ? app.accent : Paint.accent
   readonly property color popupBackgroundColor: app ? app.popupBackground : Qt.rgba(0, 0, 0, 1)
   readonly property color popupBorderColor: app ? app.popupBorder : textColor
   readonly property string panelFontFamily: app ? app.fontFamily : Style.font.family

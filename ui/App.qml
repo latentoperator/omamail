@@ -22,6 +22,8 @@ import "message/Message.js" as Message
 import "components"
 import "compose"
 import "calendar"
+import "theme"
+import "kit"
 
 Item {
   id: root
@@ -110,17 +112,17 @@ Item {
     onTriggered: root.saveComposeRecovery()
   }
 
-  readonly property color foreground: Commons.Color.foreground
-  readonly property color background: Commons.Color.background
-  readonly property color accent: Commons.Color.accent
-  readonly property color urgent: Commons.Color.urgent
-  readonly property color danger: Commons.Color.urgent
-  readonly property color popupBackground: Commons.Color.popups.background
-  readonly property color popupBorder: Commons.Color.popups.border
+  readonly property color foreground: Paint.foreground
+  readonly property color background: Paint.background
+  readonly property color accent: Paint.accent
+  readonly property color urgent: Paint.urgent
+  readonly property color danger: Paint.urgent
+  readonly property color popupBackground: Paint.popupBackground
+  readonly property color popupBorder: Paint.popupBorder
   // Shared themed border for mail and standalone window chrome.
-  readonly property color borderColor: Style.normalBorderColor
+  readonly property color borderColor: Paint.normalBorderColor
   readonly property int borderWidth: Style.normalBorderWidth
-  readonly property color calendarBorder: Style.normalBorderColor
+  readonly property color calendarBorder: Paint.normalBorderColor
   readonly property color calendarTodayBackground: Qt.alpha(root.accent, 0.035)
   readonly property int calendarBorderWidth: Style.normalBorderWidth
   readonly property color dim: Qt.rgba(
@@ -1705,7 +1707,7 @@ Item {
             }
             foreground: root.assistantOpen ? root.foreground : root.dim
             bordered: true
-            selected: root.assistantOpen
+            chosen: root.assistantOpen
             focusable: true
             accent: root.accent
             fontFamily: root.fontFamily
@@ -2491,11 +2493,11 @@ Item {
               anchors.margins: Style.space(2)
               radius: Style.cornerRadius
               color: accountMouse.pressed
-                ? Style.pressedFillFor(root.foreground, root.accent)
+                ? Paint.pressedFillFor(root.foreground, root.accent)
                 : (accountControl.selected
-                  ? Style.selectedFillFor(root.foreground, root.accent)
+                  ? Paint.selectedFillFor(root.foreground, root.accent)
                   : (accountMouse.containsMouse
-                    ? Style.hoverFillFor(root.foreground, root.accent) : "transparent"))
+                    ? Paint.hoverFillFor(root.foreground, root.accent) : "transparent"))
             }
 
             Text {

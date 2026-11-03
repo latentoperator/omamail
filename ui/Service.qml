@@ -27,6 +27,7 @@ import "message/Outbox.js" as Outbox
 import "message/Html.js" as Html
 import "message/Direction.js" as Direction
 import "settings/Appearance.js" as Appearance
+import "theme"
 
 // Owns each MailAccount and forwards the active mailbox's surface to views.
 // All accounts poll unread counts; only the active account loads lists/bodies.
@@ -50,7 +51,8 @@ Item {
   property var platform: null
   property var initialSettings: null
   readonly property var capabilities: platform && platform.capabilities
-    ? platform.capabilities : ({ agent: true, tray: true, mailto: true, notifications: true })
+    ? platform.capabilities
+    : ({ agent: true, tray: true, mailto: true, notifications: true, appTheme: true })
   readonly property bool standalone: !!platform && platform.standalone === true
   readonly property bool smokeTest: standalone
     && Quickshell.env("OMAMAIL_SMOKE_TEST") === "1"
@@ -149,17 +151,15 @@ Item {
   readonly property bool hasTray: capabilities.tray === true
   readonly property bool hasMailto: capabilities.mailto === true
   readonly property bool hasNotifications: capabilities.notifications === true
-  // Only a host that paints its own window has a palette to choose. The
-  // Omarchy plugin's colours are the shell's, decided in colors.toml.
   readonly property bool hasAppearance: capabilities.appearance === true
   readonly property string appearance: Appearance.normalizeMode(
     settings ? settings.appearance : null)
+  // The window's own theme; AppTheme owns the rest of it.
+  readonly property var theme: appThemeChoice
+  AppTheme { id: appThemeChoice; host: root }
   readonly property string notificationError: platform && platform.notificationError
     ? String(platform.notificationError) : ""
-  readonly property string calendarPalettePath: platform
-    && platform.calendarPalettePath !== undefined
-      ? String(platform.calendarPalettePath || "")
-      : Quickshell.env("HOME") + "/.local/state/omarchy/current/theme/colors.toml"
+  readonly property string calendarPalettePath: theme.colorsPath
   // Credential RPC was introduced in API 4. This minimum stays fixed after
   // release; it is a capability of the connected backend, not release state.
   readonly property bool backendCanStoreCredentials: backend.ready && backend.apiVersion >= 4
@@ -2585,8 +2585,8 @@ Item {
       CalendarReminders {
         service: root
         pluginDir: root.pluginDir
-        notificationForeground: Commons.Color.foreground
-        notificationAccent: Commons.Color.accent
+        notificationForeground: Paint.notificationForeground
+        notificationAccent: Paint.notificationAccent
       }
     }
   }
@@ -2613,8 +2613,8 @@ Item {
         return index < accounts.length ? accounts[index] : null
       }
 
-      notificationForeground: Commons.Color.foreground
-      notificationAccent: Commons.Color.accent
+      notificationForeground: Paint.notificationForeground
+      notificationAccent: Paint.notificationAccent
       pluginDir: root.pluginDir
       accountId: entry ? entry.id : ""
       backend: root.backend
