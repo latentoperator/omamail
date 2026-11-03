@@ -566,6 +566,7 @@ Item {
       accentColor: Paint.accent
       dimColor: scene.dim
       dimmerColor: scene.dimmer
+      errorColor: Paint.urgent
       popupBackgroundColor: Paint.popupBackground
       popupBorderColor: Paint.popupBorder
       panelFontFamily: Style.font.family
